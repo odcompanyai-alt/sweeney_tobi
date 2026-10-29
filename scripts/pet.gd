@@ -13,6 +13,11 @@ const GRAVITY := 2600.0                # units/s^2
 const SETTINGS_PATH := "user://settings.cfg"
 const SIZE_LEVELS := [0.75, 1.0, 1.4, 1.9]
 const SIZE_NAMES := ["작게", "보통", "크게", "아주 크게"]
+const BOX_LINES := [
+	"여러분 여러분!",
+	"God, That's Good!",
+	"드셔봐요, 러빗부인 파이\n비교할 수 없이 맛있어",
+]
 const PETTABLE := ["idle", "walk", "look", "wave", "hop", "petted"]
 
 const COL_OUTLINE := Color("#4a3228")
@@ -125,6 +130,8 @@ var box_visible := false
 var box_scale := 0.0
 var box_sq := 1.0
 var box_closing := false
+var box_line := 0
+var stomp_end := 6.4
 
 var bubble_text := ""
 var bubble_t := 0.0
@@ -356,6 +363,8 @@ func _enter(s: String) -> void:
 			box_closing = false
 			box_scale = 0.0
 			box_sq = 1.0
+			box_line = randi() % BOX_LINES.size()
+			stomp_end = randf_range(4.2, 5.0)
 
 
 func _once(key: String) -> bool:
@@ -567,7 +576,7 @@ func _st_box(_d: float) -> void:
 		if _once("land1"):
 			box_sq = 0.88
 			_dust_burst(Vector2(0, -40), 4)
-	elif st < 6.4:
+	elif st < stomp_end:
 		var sp := st - 1.45
 		pose.root = top
 		var cyc := 0.34
@@ -595,10 +604,9 @@ func _st_box(_d: float) -> void:
 		pose.mouth_open = 0.4 + 0.6 * absf(sin(sp * 11.0))
 		pose.head_rot = sin(sp * PI / cyc) * 0.05
 		pose.scarf_rot = sin(sp * PI / cyc) * 0.2
-		var lines := ["여러분 여러분!", "God, That's Good!", "드셔봐요, 러빗부인 파이\n비교할 수 없이 맛있어"]
-		_say(lines[mini(int(sp / 1.38), 2)], 0.3)
-	elif st < 7.0:
-		var g := (st - 6.4) / 0.6
+		_say(BOX_LINES[box_line], 0.3)
+	elif st < stomp_end + 0.6:
+		var g := (st - stomp_end) / 0.6
 		pose.root = top + Vector2(0, -sin(g * PI) * 7.0)
 		pose.arm_l = 155.0
 		pose.arm_r = -155.0
@@ -609,14 +617,14 @@ func _st_box(_d: float) -> void:
 				_spawn_spark(_anchor_of(Vector2(randf_range(-40, 40), randf_range(-170, -120))))
 			_spawn_heart(_anchor_of(Vector2(-26, -150)))
 			_spawn_heart(_anchor_of(Vector2(26, -150)))
-	elif st < 7.5:
-		var g := (st - 7.0) / 0.5
+	elif st < stomp_end + 1.1:
+		var g := (st - stomp_end - 0.6) / 0.5
 		pose.root = Vector2(top.x * (1.0 - g), top.y * (1.0 - g) - sin(g * PI) * 24.0)
 		pose.arm_l = 120.0
 		pose.arm_r = -120.0
 		pose.face = "happy"
-	elif st < 7.9:
-		var g := (st - 7.5) / 0.4
+	elif st < stomp_end + 1.5:
+		var g := (st - stomp_end - 1.1) / 0.4
 		if _once("land2"):
 			_dust_burst(_anchor_of(Vector2.ZERO), 4)
 		var a := exp(-g * 5.0)
@@ -1015,7 +1023,13 @@ func _on_click() -> void:
 		"sleep":
 			_say("앗, 깜짝이야!", 1.2)
 			_enter("poke")
-		"box", "wig", "fall", "drag", "land", "dizzy":
+		"box":
+			_spawn_heart(_anchor_of(Vector2(randf_range(-20, 20), -140)))
+			# while shouting, each click switches to a different line and keeps him going
+			if st > 1.25 and st < stomp_end:
+				box_line = (box_line + 1 + randi() % (BOX_LINES.size() - 1)) % BOX_LINES.size()
+				stomp_end = maxf(stomp_end, st + 2.5)
+		"wig", "fall", "drag", "land", "dizzy":
 			_spawn_heart(_anchor_of(Vector2(randf_range(-20, 20), -140)))
 		_:
 			poke_times.append(t_total)
