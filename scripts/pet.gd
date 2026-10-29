@@ -6,8 +6,8 @@ extends Node2D
 
 const PartData := preload("res://scripts/part_data.gd")
 
-const BASE_SIZE := Vector2(240, 250)   # window size at scale 1 (units)
-const FEET := Vector2(120, 244)        # where the feet touch the ground inside the window
+const BASE_SIZE := Vector2(240, 270)   # window size at scale 1 (units)
+const FEET := Vector2(120, 264)        # where the feet touch the ground inside the window
 const WALK_SPEED := 34.0               # units/s
 const GRAVITY := 2600.0                # units/s^2
 const SETTINGS_PATH := "user://settings.cfg"
@@ -567,7 +567,7 @@ func _st_box(_d: float) -> void:
 		if _once("land1"):
 			box_sq = 0.88
 			_dust_burst(Vector2(0, -40), 4)
-	elif st < 5.6:
+	elif st < 6.4:
 		var sp := st - 1.45
 		pose.root = top
 		var cyc := 0.34
@@ -595,10 +595,10 @@ func _st_box(_d: float) -> void:
 		pose.mouth_open = 0.4 + 0.6 * absf(sin(sp * 11.0))
 		pose.head_rot = sin(sp * PI / cyc) * 0.05
 		pose.scarf_rot = sin(sp * PI / cyc) * 0.2
-		var lines := ["여러분 여러분!", "God, That's Good!", "피렐리의 기적의 묘약!"]
+		var lines := ["여러분 여러분!", "God, That's Good!", "드셔봐요, 러빗부인 파이\n비교할 수 없이 맛있어"]
 		_say(lines[mini(int(sp / 1.38), 2)], 0.3)
-	elif st < 6.2:
-		var g := (st - 5.6) / 0.6
+	elif st < 7.0:
+		var g := (st - 6.4) / 0.6
 		pose.root = top + Vector2(0, -sin(g * PI) * 7.0)
 		pose.arm_l = 155.0
 		pose.arm_r = -155.0
@@ -609,14 +609,14 @@ func _st_box(_d: float) -> void:
 				_spawn_spark(_anchor_of(Vector2(randf_range(-40, 40), randf_range(-170, -120))))
 			_spawn_heart(_anchor_of(Vector2(-26, -150)))
 			_spawn_heart(_anchor_of(Vector2(26, -150)))
-	elif st < 6.7:
-		var g := (st - 6.2) / 0.5
+	elif st < 7.5:
+		var g := (st - 7.0) / 0.5
 		pose.root = Vector2(top.x * (1.0 - g), top.y * (1.0 - g) - sin(g * PI) * 24.0)
 		pose.arm_l = 120.0
 		pose.arm_r = -120.0
 		pose.face = "happy"
-	elif st < 7.1:
-		var g := (st - 6.7) / 0.4
+	elif st < 7.9:
+		var g := (st - 7.5) / 0.4
 		if _once("land2"):
 			_dust_burst(_anchor_of(Vector2.ZERO), 4)
 		var a := exp(-g * 5.0)
@@ -1397,9 +1397,13 @@ func _draw_bubble() -> void:
 	if k <= 0.05:
 		return
 	var fs := maxi(8, roundi(15.0 * s))
-	var ts := font.get_string_size(bubble_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+	var lines := bubble_text.split("\n")
+	var line_h := font.get_height(fs)
+	var text_w := 0.0
+	for line in lines:
+		text_w = maxf(text_w, font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
 	var tip := view_xf * (char_off + pose.root + Vector2(0, -146))
-	var size := Vector2(ts.x + 20.0 * s, fs + 14.0 * s) * k
+	var size := Vector2(text_w + 20.0 * s, line_h * lines.size() + 12.0 * s) * k
 	var win := Vector2(get_window().size)
 	var cx := clampf(tip.x, size.x * 0.5 + 2.0, maxf(size.x * 0.5 + 2.0, win.x - size.x * 0.5 - 2.0))
 	var rect := Rect2(Vector2(cx - size.x * 0.5, tip.y - 9.0 * s * k - size.y), size)
@@ -1414,10 +1418,11 @@ func _draw_bubble() -> void:
 	draw_colored_polygon(PackedVector2Array([
 		Vector2(bx - tw, rect.end.y - bw - 1.0), Vector2(bx + tw, rect.end.y - bw - 1.0), tip]), Color.WHITE)
 	if k > 0.7:
-		var tp := Vector2(
-			rect.position.x + (rect.size.x - ts.x) * 0.5,
-			rect.position.y + (rect.size.y + font.get_ascent(fs) - font.get_descent(fs)) * 0.5)
-		draw_string(font, tp, bubble_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_OUTLINE)
+		var top_y := rect.get_center().y - line_h * lines.size() * 0.5
+		for i in lines.size():
+			var lw := font.get_string_size(lines[i], HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+			var tp := Vector2(rect.get_center().x - lw * 0.5, top_y + line_h * i + font.get_ascent(fs))
+			draw_string(font, tp, lines[i], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_OUTLINE)
 	bubble_rect = rect.grow(bw * 2.0).expand(tip + Vector2(0, bw * 2.0))
 
 
