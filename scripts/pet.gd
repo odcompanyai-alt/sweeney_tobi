@@ -23,7 +23,13 @@ const BOX_LINES := [
 	"드셔봐요, 러빗부인 파이\n비교할 수 없이 맛있어",
 ]
 const WALK_SHOUT := "우와~~~"
-const CALM := ["idle", "walk", "look", "wave", "hop", "petted", "poke", "pout", "sit", "watch", "goto", "offer"]
+const CALM := ["idle", "walk", "look", "wave", "hop", "petted", "poke", "pout", "sit", "watch", "goto", "offer", "timekeep", "count"]
+const WIDGET_KINDS := ["memo", "todo", "stopwatch", "calc"]
+const WIDGET_LABELS := ["할 일", "메모", "스톱워치", "계산기"]
+const WIDGET_GREETINGS := {"todo": "할 일 같이 해요!", "memo": "뭐 적을 거예요?", "stopwatch": "시간 재 볼까요?", "calc": "계산은 저한테 맡기세요!"}
+const TICK_LINES := ["째깍째깍…", "시간은 금이에요!", "파이 굽는 시간 재는 중!", "똑딱똑딱~"]
+const COUNT_LINES := ["음…", "하나, 둘…", "흠흠", "?"]
+const COIN_LINES := ["계산 끝!", "정확해요!", "러빗 부인께 보고할게요!"]
 const CHEER_LINES := ["해냈다!", "최고예요!", "하나 끝!", "잘했어요!", "멋져요!"]
 const CONFETTI_COLORS := [Color("#ff698c"), Color("#ffd65a"), Color("#7fb6ff"), Color("#9ad48a"), Color("#e8743b")]
 const LONG_PRESS := 0.55
@@ -63,7 +69,7 @@ const FACES := {
 	"drunk": ["closed", "open_smile", "worried"],
 }
 
-enum { M_TODO, M_MEMO, M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_QUIT, M_SIZE0 = 100 }
+enum { M_TODO, M_MEMO, M_STOPWATCH, M_CALC, M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_QUIT, M_SIZE0 = 100 }
 
 
 class Pose:
@@ -188,6 +194,10 @@ var memo_type_t := -10.0        # last time something was typed in the memo
 var press_time := 0.0
 var launcher_t := 99.0          # time since the long-press launcher opened
 var launcher_off := Vector2.ZERO
+var sw_last_min := 0
+var calc_key_t := -10.0
+var calc_keys := 0
+var calc_value := 0.0
 
 var stamp_t := 99.0            # time since the logo was stamped
 var stamp_pos := Vector2.ZERO  # logo centre (anchor space)
@@ -222,6 +232,10 @@ func _ready() -> void:
 	widgets.setup(auto_scale)
 	widgets.todo_completed.connect(_on_todo_completed)
 	widgets.memo_typed.connect(_on_memo_typed)
+	widgets.stopwatch_changed.connect(_on_stopwatch_changed)
+	widgets.stopwatch_reset.connect(_on_stopwatch_reset)
+	widgets.calc_key.connect(_on_calc_key)
+	widgets.calc_result.connect(_on_calc_result)
 	widgets.focused.connect(func(kind: String) -> void: widget_focus = kind)
 	_refresh_screen()
 	_apply_scale()
@@ -268,6 +282,8 @@ func _build_menu() -> void:
 	menu = PopupMenu.new()
 	menu.add_check_item("할 일 목록", M_TODO)
 	menu.add_check_item("메모장", M_MEMO)
+	menu.add_check_item("스톱워치", M_STOPWATCH)
+	menu.add_check_item("계산기", M_CALC)
 	menu.add_separator()
 	menu.add_item("박스 위에서 외치기", M_BOX)
 	menu.add_item("가발 벗기", M_WIG)
@@ -293,6 +309,8 @@ func _sync_menu() -> void:
 	menu.set_item_checked(menu.get_item_index(M_STILL), stay_still)
 	menu.set_item_checked(menu.get_item_index(M_TODO), widgets.is_open("todo"))
 	menu.set_item_checked(menu.get_item_index(M_MEMO), widgets.is_open("memo"))
+	menu.set_item_checked(menu.get_item_index(M_STOPWATCH), widgets.is_open("stopwatch"))
+	menu.set_item_checked(menu.get_item_index(M_CALC), widgets.is_open("calc"))
 
 
 func _open_menu() -> void:
@@ -305,6 +323,8 @@ func _on_menu(id: int) -> void:
 	match id:
 		M_TODO: _toggle_widget("todo")
 		M_MEMO: _toggle_widget("memo")
+		M_STOPWATCH: _toggle_widget("stopwatch")
+		M_CALC: _toggle_widget("calc")
 		M_BOX: _start_action("box")
 		M_WIG: _start_action("wig")
 		M_DRINK: _start_action("drink")
@@ -384,6 +404,10 @@ func _process(delta: float) -> void:
 		"watch": _st_watch(d)
 		"cheer": _st_cheer(d)
 		"offer": _st_offer(d)
+		"timekeep": _st_timekeep(d)
+		"record": _st_record(d)
+		"count": _st_count(d)
+		"coins": _st_coins(d)
 		"sleep": _st_sleep(d)
 		"wake": _st_wake(d)
 		"poke": _st_poke(d)
@@ -466,8 +490,7 @@ func _pick_next() -> void:
 		if absf(tx - pos.x) > 6.0 * pet_scale:
 			_enter("goto")
 			return
-		if _active_widget() == widgets.memo_win:
-			_enter("sit")
+		if _arrive_widget():
 			return
 	var opts := {
 		"walk": 0.0 if stay_still else 36.0,
@@ -1099,16 +1122,39 @@ func _st_stamp(_d: float) -> void:
 # Widgets: keeping Tobi company with the To-Do list and the memo pad
 # ----------------------------------------------------------------------
 
-func _active_widget() -> Window:
+func _active_kind() -> String:
 	if widgets == null:
-		return null
-	var m := widgets.is_open("memo")
-	var t := widgets.is_open("todo")
-	if m and (widget_focus == "memo" or not t):
-		return widgets.memo_win
-	if t:
-		return widgets.todo_win
-	return null
+		return ""
+	if widget_focus != "" and widgets.is_open(widget_focus):
+		return widget_focus
+	for k in WIDGET_KINDS:
+		if widgets.is_open(k):
+			return k
+	return ""
+
+
+func _active_widget() -> Window:
+	var kind := _active_kind()
+	return widgets.window_of(kind) if kind != "" else null
+
+
+## Picks what to do once standing next to the active widget. Returns false
+## when there is nothing widget-specific to do (Tobi just idles nearby).
+func _arrive_widget() -> bool:
+	match _active_kind():
+		"memo":
+			_enter("watch" if t_total - memo_type_t < 2.0 else "sit")
+			return true
+		"stopwatch":
+			if widgets.sw_running:
+				_enter("timekeep")
+				return true
+		"calc":
+			if t_total - calc_key_t < 2.0:
+				_enter("count")
+				return true
+	_face_widget()
+	return false
 
 
 ## Screen x where Tobi should stand next to the active widget (NAN if none).
@@ -1140,7 +1186,7 @@ func _toggle_widget(kind: String) -> void:
 	widgets.toggle(kind, pos, usable)
 	if widgets.is_open(kind):
 		widget_focus = kind
-		_say("할 일 같이 해요!" if kind == "todo" else "뭐 적을 거예요?", 1.6)
+		_say(WIDGET_GREETINGS[kind], 1.6)
 		if state in CALM:
 			_enter("goto")
 
@@ -1169,10 +1215,7 @@ func _st_goto(d: float) -> void:
 	var dx := tx - pos.x
 	if absf(dx) < 3.0:
 		pos.x = tx
-		if _active_widget() == widgets.memo_win:
-			_enter("watch" if t_total - memo_type_t < 2.0 else "sit")
-		else:
-			_face_widget()
+		if not _arrive_widget():
 			_enter("idle")
 		return
 	facing = signf(dx)
@@ -1183,7 +1226,7 @@ func _st_goto(d: float) -> void:
 
 ## Sitting in front of the memo pad, swinging his feet (and dozing off after a while).
 func _st_sit(d: float) -> void:
-	if _active_widget() != widgets.memo_win:
+	if _active_kind() != "memo":
 		_enter("idle")
 		return
 	var tx := _widget_target_x()
@@ -1218,7 +1261,7 @@ func _st_sit(d: float) -> void:
 
 ## Peeking at what is being written: tiptoes, leaning in, reading along and nodding.
 func _st_watch(d: float) -> void:
-	if _active_widget() != widgets.memo_win:
+	if _active_kind() != "memo":
 		_enter("idle")
 		return
 	if t_total - memo_type_t > 2.5:
@@ -1247,7 +1290,7 @@ func _st_watch(d: float) -> void:
 
 ## A To-Do item got done: bounce, bounce, bounce!
 func _st_cheer(d: float) -> void:
-	if _active_widget() == widgets.todo_win:
+	if _active_kind() == "todo":
 		_face_widget()
 	if _once("start"):
 		_say(CHEER_LINES[randi() % CHEER_LINES.size()], 1.8)
@@ -1283,6 +1326,155 @@ func _st_cheer(d: float) -> void:
 		_spawn_spark(_anchor_of(Vector2(randf_range(-40, 40), randf_range(-150, -100))))
 
 
+func _go_or(near_state: String) -> void:
+	var tx := _widget_target_x()
+	_enter(near_state if absf(tx - pos.x) <= 6.0 * pet_scale else "goto")
+
+
+func _on_stopwatch_changed(running: bool) -> void:
+	widget_focus = "stopwatch"
+	if state in ["drag", "fall"]:
+		return
+	if running:
+		sw_last_min = int(widgets.sw_elapsed / 60.0)
+		_say("시작!", 1.0)
+		if state in CALM:
+			_go_or("timekeep")
+	elif widgets.sw_elapsed > 0.0:
+		_cleanup_specials()
+		_enter("record")
+
+
+func _on_stopwatch_reset() -> void:
+	widget_focus = "stopwatch"
+	sw_last_min = 0
+	if state in CALM:
+		_say("다시 시작!", 1.2)
+		if state == "timekeep":
+			_enter("idle")
+
+
+func _on_calc_key() -> void:
+	widget_focus = "calc"
+	calc_key_t = t_total
+	calc_keys += 1
+	if state in CALM and state != "count" and state != "goto":
+		_go_or("count")
+
+
+func _on_calc_result(value: float, error: bool) -> void:
+	widget_focus = "calc"
+	if state in ["drag", "fall"]:
+		return
+	_cleanup_specials()
+	if error:
+		_say("어지러워요…", 2.0)
+		_enter("dizzy")
+	else:
+		calc_value = value
+		_enter("coins")
+
+
+## Stopwatch running: pocket watch in hand, tick-tock head and a tapping foot.
+func _st_timekeep(d: float) -> void:
+	if _active_kind() != "stopwatch" or not widgets.sw_running:
+		_enter("idle")
+		return
+	if absf(_widget_target_x() - pos.x) > 40.0 * pet_scale:
+		_enter("goto")
+		return
+	_face_widget()
+	var sec := widgets.sw_elapsed
+	var tick := exp(-fmod(sec, 1.0) * 12.0)
+	var side_f := 1.0 if int(sec) % 2 == 0 else -1.0
+	pose.arms_front = true
+	pose.prop = "pocketwatch"
+	pose.arm_r = 35.0 + tick * 3.0
+	pose.arm_l = 12.0 + sin(st * 2.0) * 3.0
+	pose.look = Vector2(0.35, 0.7)
+	pose.head_rot = side_f * 0.05 * (1.0 - tick * 0.5)
+	pose.foot_l.y = -tick * 3.0
+	pose.squash = Vector2(1.0 + tick * 0.02, 1.0 - tick * 0.025)
+	pose.scarf_rot = side_f * 0.05
+	var m := int(sec / 60.0)
+	if m > sw_last_min:
+		sw_last_min = m
+		_say("%d분 지났어요!" % m, 2.0)
+		_spawn_spark(_anchor_of(Vector2(30, -60)))
+	elif fmod(st, 9.0) < d and st > 2.0 and bubble_left <= 0.0:
+		_say(TICK_LINES[randi() % TICK_LINES.size()], 1.6)
+
+
+## Stopwatch stopped: holds the watch up high and announces the time.
+func _st_record(_d: float) -> void:
+	if _once("say"):
+		_say("기록 %s!" % widgets.format_time(widgets.sw_elapsed), 2.4)
+		for i in 3:
+			_spawn_spark(_anchor_of(Vector2(randf_range(-40, 40), randf_range(-160, -110))))
+		_spawn_heart(_anchor_of(Vector2(-30, -140)))
+	var a := _smooth(st / 0.3)
+	pose.arms_front = true
+	pose.prop = "pocketwatch"
+	pose.arm_r = lerpf(35.0, -150.0, a)
+	pose.arm_l = 12.0 + 20.0 * a
+	pose.face = "happy"
+	pose.blush = 0.8
+	pose.look = Vector2(0.4, -0.6)
+	if st < 0.8:
+		pose.root.y = -absf(sin(st / 0.4 * PI)) * 10.0
+	if st > 2.4:
+		_enter("idle")
+
+
+## Calculator in use: counting on his fingers along with every key press.
+func _st_count(d: float) -> void:
+	if _active_kind() != "calc" or t_total - calc_key_t > 2.5:
+		_enter("idle")
+		return
+	if absf(_widget_target_x() - pos.x) > 40.0 * pet_scale:
+		_enter("goto")
+		return
+	var up := _face_widget()
+	var k := exp(-(t_total - calc_key_t) * 8.0)
+	pose.look = Vector2(0.7, up)
+	if calc_keys % 2 == 0:
+		pose.arm_l = 12.0 + 70.0 * k
+	else:
+		pose.arm_r = -12.0 - 70.0 * k
+	pose.head_off.y = k * 1.5
+	pose.head_rot = sin(st * 1.5) * 0.04
+	pose.squash = Vector2(1.0 + k * 0.02, 1.0 - k * 0.03)
+	pose.face = "effort" if calc_keys % 9 > 6 else "normal"
+	pose.blush = 0.4
+	if fmod(st, 3.0) < d and st > 0.8:
+		_spawn_text(_anchor_of(Vector2(30, -150)), COUNT_LINES[randi() % COUNT_LINES.size()], 13.0, COL_TEXT)
+
+
+## "=" pressed: the answer rains down as coins.
+func _st_coins(_d: float) -> void:
+	if _once("start"):
+		var line: String = COIN_LINES[randi() % COIN_LINES.size()]
+		if absf(calc_value) >= 1_000_000.0:
+			line = "우와, 부자예요!"
+		elif randf() < 0.35:
+			line = "답은 %s!" % widgets.format_number(calc_value)
+		_say(line, 2.0)
+		_spawn_text(_anchor_of(Vector2(-34, -150)), "짤랑!", 14.0, Color("#c8921e"))
+		for i in 10:
+			var c := _spawn("coin", _anchor_of(Vector2(randf_range(-45, 45), randf_range(-190, -150))),
+				Vector2(randf_range(-20, 20), randf_range(-60, 0)), 1.4, 1.0, 520.0)
+			c.spin = randf_range(6.0, 12.0)
+	pose.face = "happy"
+	pose.blush = 0.8
+	pose.arm_l = 130.0 + sin(st * 14.0) * 10.0
+	pose.arm_r = -130.0 - sin(st * 14.0 + 1.0) * 10.0
+	pose.look.y = -0.8
+	if st < 0.5:
+		pose.root.y = -sin(st / 0.5 * PI) * 12.0
+	if st > 2.0:
+		_enter("idle")
+
+
 ## Long-press launcher: Tobi holds up the widget buttons.
 func _st_offer(_d: float) -> void:
 	var a := _smooth(st / 0.25)
@@ -1305,13 +1497,14 @@ func _open_launcher() -> void:
 
 
 func _launcher_pos(i: int) -> Vector2:
-	return launcher_off + Vector2(-44.0 if i == 0 else 44.0, -182.0)
+	var x := -72.0 + i * 48.0
+	return launcher_off + Vector2(x, -186.0 + absf(x) * 0.12)
 
 
 func _hit_launcher(local_px: Vector2) -> int:
 	if launcher_t > LAUNCHER_LIFE:
 		return -1
-	for i in 2:
+	for i in WIDGET_LABELS.size():
 		if local_px.distance_to(view_xf * _launcher_pos(i)) < 20.0 * pet_scale:
 			return i
 	return -1
@@ -1510,7 +1703,7 @@ func _input(event: InputEvent) -> void:
 				var btn := _hit_launcher(mb.position)
 				if btn >= 0:
 					launcher_t = 99.0
-					_toggle_widget("todo" if btn == 0 else "memo")
+					_toggle_widget(["todo", "memo", "stopwatch", "calc"][btn])
 					return
 				if launcher_t < LAUNCHER_LIFE:
 					launcher_t = 99.0
@@ -1677,7 +1870,7 @@ func _update_passthrough() -> void:
 	if box_visible:
 		r = r.merge(Rect2(-44, -48, 88, 52))
 	if launcher_t < LAUNCHER_LIFE:
-		r = r.merge(Rect2(launcher_off + Vector2(-72, -212), Vector2(144, 66)))
+		r = r.merge(Rect2(launcher_off + Vector2(-100, -216), Vector2(200, 72)))
 	if stamp_t < STAMP_LIFE:
 		r = r.merge(Rect2(stamp_pos - Vector2(LOGO_WIDTH * 0.7, 80), Vector2(LOGO_WIDTH * 1.4, 160)))
 	if not wig_attached:
@@ -1818,7 +2011,7 @@ func _draw_launcher() -> void:
 	if launcher_t > LAUNCHER_LIFE:
 		return
 	var fade := clampf((LAUNCHER_LIFE - launcher_t) / 0.3, 0.0, 1.0)
-	for i in 2:
+	for i in WIDGET_LABELS.size():
 		var k := _ease_out_back((launcher_t - i * 0.07) / 0.25) * fade
 		if k <= 0.05:
 			continue
@@ -1827,19 +2020,33 @@ func _draw_launcher() -> void:
 		_ell(Vector2(0, 1.5), 17.0, 17.0, Color(0, 0, 0, 0.12))
 		_ell(Vector2.ZERO, 17.0, 17.0, Color("#fff8ec"))
 		_arc(Vector2.ZERO, 17.0, 0.0, TAU, COL_OUTLINE, 1.6)
-		if i == 0:
-			for j in 3:
-				var y := -6.0 + j * 6.0
-				_polyline(PackedVector2Array([Vector2(-9, y), Vector2(-7, y + 2), Vector2(-3.5, y - 2.5)]), Color("#5aa86a"), 1.6)
-				_line(Vector2(0, y), Vector2(9, y), COL_OUTLINE, 1.6)
-		else:
-			_ell(Vector2(-1, 0), 7.0, 9.0, Color.WHITE)
-			_arc(Vector2(-1, 0), 7.5, 0.0, TAU, COL_OUTLINE, 0.8)
-			for j in 3:
-				_line(Vector2(-5, -4.0 + j * 4.0), Vector2(3, -4.0 + j * 4.0), Color("#c9b79c"), 1.0)
-			_line(Vector2(9, -9), Vector2(2, 3), COL_LINE, 2.6)
-			_line(Vector2(2, 3), Vector2(1, 5), COL_OUTLINE, 1.4)
-		_text_px(c + Vector2(0, 27.0), "할 일" if i == 0 else "메모", 11.0, COL_OUTLINE, Color(1, 1, 1, 0.95))
+		match i:
+			0:
+				for j in 3:
+					var y := -6.0 + j * 6.0
+					_polyline(PackedVector2Array([Vector2(-9, y), Vector2(-7, y + 2), Vector2(-3.5, y - 2.5)]), Color("#5aa86a"), 1.6)
+					_line(Vector2(0, y), Vector2(9, y), COL_OUTLINE, 1.6)
+			1:
+				_ell(Vector2(-1, 0), 7.0, 9.0, Color.WHITE)
+				_arc(Vector2(-1, 0), 7.5, 0.0, TAU, COL_OUTLINE, 0.8)
+				for j in 3:
+					_line(Vector2(-5, -4.0 + j * 4.0), Vector2(3, -4.0 + j * 4.0), Color("#c9b79c"), 1.0)
+				_line(Vector2(9, -9), Vector2(2, 3), COL_LINE, 2.6)
+				_line(Vector2(2, 3), Vector2(1, 5), COL_OUTLINE, 1.4)
+			2:
+				_line(Vector2(0, -12), Vector2(0, -9), COL_OUTLINE, 2.4)
+				_ell(Vector2(0, 1), 9.0, 9.0, Color("#eab648"))
+				_ell(Vector2(0, 1), 7.0, 7.0, Color.WHITE)
+				_line(Vector2(0, 1), Vector2(0, -4), COL_OUTLINE, 1.4)
+				_line(Vector2(0, 1), Vector2(3.5, 3), COL_ANGER, 1.2)
+			3:
+				draw_colored_polygon(PackedVector2Array([Vector2(-8, -10), Vector2(8, -10), Vector2(8, 10), Vector2(-8, 10)]), Color("#5a6f9a"))
+				draw_colored_polygon(PackedVector2Array([Vector2(-6, -8), Vector2(6, -8), Vector2(6, -3), Vector2(-6, -3)]), Color("#d8f0d8"))
+				for j in 6:
+					var bx := -4.0 + (j % 3) * 4.0
+					var by := 1.0 + int(j / 3.0) * 4.5
+					_ell(Vector2(bx, by), 1.3, 1.3, Color("#ffd65a") if j == 5 else Color.WHITE)
+		_text_px(c + Vector2(0, 27.0), WIDGET_LABELS[i], 10.0, COL_OUTLINE, Color(1, 1, 1, 0.95))
 
 
 func _draw_stamp() -> void:
@@ -1910,7 +2117,13 @@ func _draw_prop(p: Pose, bt: Transform2D) -> void:
 	var at := Vector2(23, -38) + hand.rotated(deg_to_rad(p.arm_r))
 	if p.prop_hand == "both":
 		at = (at + Vector2(-23, -38) + hand.rotated(deg_to_rad(p.arm_l))) * 0.5
-	_part(p.prop, bt * Transform2D(p.prop_rot, at + p.prop_off) * Transform2D(0.0, Vector2(p.prop_scale, p.prop_scale), 0.0, Vector2.ZERO))
+	var pxf := bt * Transform2D(p.prop_rot, at + p.prop_off) * Transform2D(0.0, Vector2(p.prop_scale, p.prop_scale), 0.0, Vector2.ZERO)
+	_part(p.prop, pxf)
+	if p.prop == "pocketwatch" and widgets:
+		draw_set_transform_matrix(pxf)
+		var a := widgets.sw_elapsed / 60.0 * TAU
+		_line(Vector2.ZERO, Vector2(0, -5.8).rotated(a), COL_ANGER, 0.8)
+		_ell(Vector2.ZERO, 0.9, 0.9, COL_ANGER)
 
 
 func _draw_bald() -> void:
@@ -2046,6 +2259,11 @@ func _draw_particles() -> void:
 				_note(p.pos + Vector2(sin(age * 5.0) * 3.0, 0), Color(p.color, a))
 			"sweat":
 				_drop(p.pos, 3.0, Color(COL_SWEAT, a))
+			"coin":
+				var w := absf(cos(p.rot)) * 4.2 + 0.6
+				_ell(p.pos, w + 0.8, 5.0, Color("#b07c18", a))
+				_ell(p.pos, w, 4.2, Color("#f2c14e", a))
+				_ell(p.pos + Vector2(-w * 0.3, -1.4), w * 0.35, 1.2, Color(1.0, 0.96, 0.8, a))
 			"confetti":
 				var cp := PackedVector2Array([Vector2(-2, -1.2), Vector2(2, -1.2), Vector2(2, 1.2), Vector2(-2, 1.2)])
 				for k in 4:

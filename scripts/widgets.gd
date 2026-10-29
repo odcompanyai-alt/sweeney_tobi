@@ -1,37 +1,60 @@
 extends Node
-## Tobi's desk widgets: a To-Do list and a memo pad, each in its own small
-## always-on-top window. Contents are saved to user://widgets.cfg.
-## The pet listens to the signals to react (cheer, come over and watch...).
+## Tobi's desk widgets — To-Do list, memo pad, stopwatch and calculator —
+## each in its own small always-on-top window. To-Do and memo contents are
+## saved to user://widgets.cfg. The pet listens to the signals to react.
 
 signal todo_completed(text: String)
 signal memo_typed
+signal stopwatch_changed(running: bool)
+signal stopwatch_reset
+signal calc_key
+signal calc_result(value: float, error: bool)
 signal focused(kind: String)
 
 const SAVE_PATH := "user://widgets.cfg"
+const KINDS := ["todo", "memo", "stopwatch", "calc"]
+const TITLES := {"todo": "토비의 할 일", "memo": "토비의 메모", "stopwatch": "토비의 스톱워치", "calc": "토비의 계산기"}
+const SIZES := {"todo": Vector2i(270, 340), "memo": Vector2i(300, 340), "stopwatch": Vector2i(270, 210), "calc": Vector2i(260, 360)}
+const CALC_KEYS := ["C", "±", "%", "÷", "7", "8", "9", "×", "4", "5", "6", "-", "1", "2", "3", "+", "0", ".", "←", "="]
 const COL_INK := Color("#4a3228")
 const COL_SOFT := Color("#9a8670")
 const COL_PAPER := Color("#fff8ec")
 const COL_ACCENT := Color("#e8743b")
 
 var ui_scale := 1.0
-var todo_win: Window
-var memo_win: Window
+var windows := {}
 var todo_input: LineEdit
 var todo_list: VBoxContainer
 var memo_edit: TextEdit
 var todo_items: Array = []
+var memo_text := ""
 var memo_dirty := false
 var memo_save_timer := 0.0
+
+var sw_running := false
+var sw_elapsed := 0.0
+var sw_label: Label
+var sw_button: Button
+
+var calc_display: Label
+var calc_expr: Label
+var calc_entry := "0"
+var calc_acc := 0.0
+var calc_op := ""
+var calc_new := true
+var calc_error := false
 
 
 func setup(scale_factor: float) -> void:
 	ui_scale = scale_factor
 	_load()
 	var theme := _make_theme()
-	todo_win = _make_window("토비의 할 일", Vector2i(270, 340), theme, "todo")
-	memo_win = _make_window("토비의 메모", Vector2i(300, 340), theme, "memo")
+	for kind in KINDS:
+		windows[kind] = _make_window(kind, theme)
 	_build_todo()
 	_build_memo()
+	_build_stopwatch()
+	_build_calc()
 
 
 func _process(delta: float) -> void:
@@ -39,10 +62,13 @@ func _process(delta: float) -> void:
 		memo_save_timer -= delta
 		if memo_save_timer <= 0.0:
 			save()
+	if sw_running:
+		sw_elapsed += delta
+		sw_label.text = format_time(sw_elapsed)
 
 
 func window_of(kind: String) -> Window:
-	return todo_win if kind == "todo" else memo_win
+	return windows.get(kind) as Window
 
 
 func is_open(kind: String) -> bool:
@@ -64,10 +90,9 @@ func open(kind: String, near: Vector2, usable: Rect2i) -> void:
 		w.position = Vector2i(roundi(x), roundi(y))
 		w.show()
 	w.grab_focus()
-	if kind == "todo":
-		todo_input.grab_focus()
-	else:
-		memo_edit.grab_focus()
+	match kind:
+		"todo": todo_input.grab_focus()
+		"memo": memo_edit.grab_focus()
 	focused.emit(kind)
 
 
@@ -87,7 +112,7 @@ func save() -> void:
 	memo_dirty = false
 	var cfg := ConfigFile.new()
 	cfg.set_value("todo", "items", todo_items)
-	cfg.set_value("memo", "text", memo_edit.text if memo_edit else "")
+	cfg.set_value("memo", "text", memo_edit.text if memo_edit else memo_text)
 	cfg.save(SAVE_PATH)
 
 
@@ -95,18 +120,35 @@ func _load() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SAVE_PATH) == OK:
 		todo_items = cfg.get_value("todo", "items", [])
-		set_meta("memo_text", str(cfg.get_value("memo", "text", "")))
+		memo_text = str(cfg.get_value("memo", "text", ""))
+
+
+func format_time(t: float) -> String:
+	var mins := int(t / 60.0)
+	var secs := fmod(t, 60.0)
+	if mins >= 60:
+		return "%d:%02d:%05.2f" % [mins / 60, mins % 60, secs]
+	return "%02d:%05.2f" % [mins, secs]
+
+
+func format_number(v: float) -> String:
+	if is_nan(v) or is_inf(v):
+		return "오류"
+	if absf(v) < 1e15 and v == floorf(v):
+		return str(int(v))
+	return String.num(v, 10)
 
 
 # ----------------------------------------------------------------------
 # Windows
 # ----------------------------------------------------------------------
 
-func _make_window(title: String, size: Vector2i, theme: Theme, kind: String) -> Window:
+func _make_window(kind: String, theme: Theme) -> Window:
 	var w := Window.new()
-	w.title = title
-	w.size = Vector2i(Vector2(size) * ui_scale)
-	w.min_size = Vector2i(Vector2(220, 220) * ui_scale)
+	w.title = TITLES[kind]
+	var base: Vector2i = SIZES[kind]
+	w.size = Vector2i(Vector2(base) * ui_scale)
+	w.min_size = Vector2i(Vector2(200, 180) * ui_scale)
 	w.content_scale_factor = ui_scale
 	w.always_on_top = true
 	w.visible = false
@@ -126,19 +168,30 @@ func _make_window(title: String, size: Vector2i, theme: Theme, kind: String) -> 
 	v.add_theme_constant_override("separation", 8)
 	panel.add_child(v)
 	var head := Label.new()
-	head.text = title
+	head.text = TITLES[kind]
 	head.add_theme_font_size_override("font_size", 18)
 	head.add_theme_color_override("font_color", COL_INK)
 	v.add_child(head)
 	return w
 
 
-func _content(w: Window) -> VBoxContainer:
-	return w.get_child(0).get_child(0) as VBoxContainer
+func _content(kind: String) -> VBoxContainer:
+	return window_of(kind).get_child(0).get_child(0) as VBoxContainer
 
+
+func _hint(v: VBoxContainer, text: String) -> void:
+	var hint := Label.new()
+	hint.text = text
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.add_theme_color_override("font_color", COL_SOFT)
+	v.add_child(hint)
+
+
+# --- To-Do ------------------------------------------------------------
 
 func _build_todo() -> void:
-	var v := _content(todo_win)
+	var v := _content("todo")
 	var row := HBoxContainer.new()
 	v.add_child(row)
 	todo_input = LineEdit.new()
@@ -158,20 +211,7 @@ func _build_todo() -> void:
 	todo_list = VBoxContainer.new()
 	todo_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(todo_list)
-
-	var hint := Label.new()
-	hint.text = "다 한 일을 체크하면 토비가 같이 기뻐해요!"
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 12)
-	hint.add_theme_color_override("font_color", COL_SOFT)
-	v.add_child(hint)
-	_rebuild_todo()
-
-
-func _rebuild_todo() -> void:
-	for c in todo_list.get_children():
-		todo_list.remove_child(c)
-		c.queue_free()
+	_hint(v, "다 한 일을 체크하면 토비가 같이 기뻐해요!")
 	for item in todo_items:
 		_add_todo_row(str(item))
 
@@ -226,13 +266,15 @@ func _on_todo_delete(row: HBoxContainer) -> void:
 	save()
 
 
+# --- Memo -------------------------------------------------------------
+
 func _build_memo() -> void:
-	var v := _content(memo_win)
+	var v := _content("memo")
 	memo_edit = TextEdit.new()
 	memo_edit.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	memo_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	memo_edit.placeholder_text = "여기에 적으면 토비가 구경하러 와요"
-	memo_edit.text = str(get_meta("memo_text", ""))
+	memo_edit.text = memo_text
 	memo_edit.text_changed.connect(_on_memo_changed)
 	v.add_child(memo_edit)
 
@@ -241,6 +283,224 @@ func _on_memo_changed() -> void:
 	memo_dirty = true
 	memo_save_timer = 1.0
 	memo_typed.emit()
+
+
+# --- Stopwatch --------------------------------------------------------
+
+func _build_stopwatch() -> void:
+	var v := _content("stopwatch")
+	var mono := SystemFont.new()
+	mono.font_names = PackedStringArray(["SF Mono", "Menlo", "Consolas", "monospace"])
+	sw_label = Label.new()
+	sw_label.text = format_time(0.0)
+	sw_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sw_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sw_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	sw_label.add_theme_font_override("font", mono)
+	sw_label.add_theme_font_size_override("font_size", 40)
+	v.add_child(sw_label)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	v.add_child(row)
+	sw_button = Button.new()
+	sw_button.text = "시작"
+	sw_button.focus_mode = Control.FOCUS_NONE
+	sw_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sw_button.add_theme_stylebox_override("normal", _accent_box())
+	sw_button.add_theme_color_override("font_color", Color.WHITE)
+	sw_button.add_theme_color_override("font_hover_color", Color.WHITE)
+	sw_button.pressed.connect(_sw_toggle)
+	row.add_child(sw_button)
+	var reset := Button.new()
+	reset.text = "초기화"
+	reset.focus_mode = Control.FOCUS_NONE
+	reset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	reset.pressed.connect(_sw_reset)
+	row.add_child(reset)
+	_hint(v, "스페이스바로도 시작/정지할 수 있어요")
+	window_of("stopwatch").window_input.connect(_on_sw_input)
+
+
+func _sw_toggle() -> void:
+	sw_running = not sw_running
+	sw_button.text = "정지" if sw_running else "계속"
+	stopwatch_changed.emit(sw_running)
+
+
+func _sw_reset() -> void:
+	sw_running = false
+	sw_elapsed = 0.0
+	sw_label.text = format_time(0.0)
+	sw_button.text = "시작"
+	stopwatch_reset.emit()
+
+
+func _on_sw_input(event: InputEvent) -> void:
+	var k := event as InputEventKey
+	if k and k.pressed and not k.echo and k.keycode == KEY_SPACE:
+		_sw_toggle()
+		window_of("stopwatch").set_input_as_handled()
+
+
+# --- Calculator -------------------------------------------------------
+
+func _build_calc() -> void:
+	var v := _content("calc")
+	calc_expr = Label.new()
+	calc_expr.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	calc_expr.add_theme_font_size_override("font_size", 13)
+	calc_expr.add_theme_color_override("font_color", COL_SOFT)
+	v.add_child(calc_expr)
+	calc_display = Label.new()
+	calc_display.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	calc_display.clip_text = true
+	calc_display.add_theme_font_size_override("font_size", 30)
+	v.add_child(calc_display)
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 6)
+	v.add_child(grid)
+	for key in CALC_KEYS:
+		var b := Button.new()
+		b.text = key
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		b.focus_mode = Control.FOCUS_NONE
+		b.add_theme_font_size_override("font_size", 18)
+		if key in ["÷", "×", "-", "+", "="]:
+			b.add_theme_stylebox_override("normal", _accent_box())
+			b.add_theme_color_override("font_color", Color.WHITE)
+			b.add_theme_color_override("font_hover_color", Color.WHITE)
+		b.pressed.connect(_calc_press.bind(key))
+		grid.add_child(b)
+	window_of("calc").window_input.connect(_on_calc_input)
+	_calc_refresh()
+
+
+func _on_calc_input(event: InputEvent) -> void:
+	var k := event as InputEventKey
+	if k == null or not k.pressed or k.echo:
+		return
+	var key := ""
+	var ch := char(k.unicode) if k.unicode > 0 else ""
+	if ch in ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "+", "-", "%"]:
+		key = ch
+	elif ch == "*":
+		key = "×"
+	elif ch == "/":
+		key = "÷"
+	elif ch == "=" or k.keycode == KEY_ENTER or k.keycode == KEY_KP_ENTER:
+		key = "="
+	elif k.keycode == KEY_BACKSPACE:
+		key = "←"
+	elif k.keycode == KEY_ESCAPE or k.keycode == KEY_DELETE:
+		key = "C"
+	if key != "":
+		_calc_press(key)
+		window_of("calc").set_input_as_handled()
+
+
+func _calc_press(key: String) -> void:
+	if calc_error and key != "C":
+		_calc_clear()
+	match key:
+		"C":
+			_calc_clear()
+		"±":
+			if calc_entry.begins_with("-"):
+				calc_entry = calc_entry.substr(1)
+			elif calc_entry != "0":
+				calc_entry = "-" + calc_entry
+		"%":
+			calc_entry = format_number(float(calc_entry) / 100.0)
+		"←":
+			if not calc_new:
+				calc_entry = calc_entry.left(-1)
+				if calc_entry.is_empty() or calc_entry == "-":
+					calc_entry = "0"
+		"÷", "×", "-", "+":
+			if calc_op != "" and not calc_new:
+				if not _calc_apply():
+					_calc_fail()
+					return
+			else:
+				calc_acc = float(calc_entry)
+			calc_op = key
+			calc_new = true
+		"=":
+			if calc_op != "":
+				if not _calc_apply():
+					_calc_fail()
+					return
+				calc_op = ""
+			calc_new = true
+			_calc_refresh()
+			calc_key.emit()
+			calc_result.emit(float(calc_entry), false)
+			return
+		_:
+			if calc_new:
+				calc_entry = "0." if key == "." else key
+				calc_new = false
+			elif key == ".":
+				if not "." in calc_entry:
+					calc_entry += "."
+			elif calc_entry == "0":
+				calc_entry = key
+			elif calc_entry.length() < 15:
+				calc_entry += key
+	_calc_refresh()
+	calc_key.emit()
+
+
+func _calc_apply() -> bool:
+	var b := float(calc_entry)
+	var r := b
+	match calc_op:
+		"+": r = calc_acc + b
+		"-": r = calc_acc - b
+		"×": r = calc_acc * b
+		"÷":
+			if b == 0.0:
+				return false
+			r = calc_acc / b
+	calc_acc = r
+	calc_entry = format_number(r)
+	return true
+
+
+func _calc_fail() -> void:
+	_calc_clear()
+	calc_error = true
+	calc_display.text = "0으로 못 나눠요"
+	calc_key.emit()
+	calc_result.emit(0.0, true)
+
+
+func _calc_clear() -> void:
+	calc_entry = "0"
+	calc_acc = 0.0
+	calc_op = ""
+	calc_new = true
+	calc_error = false
+	_calc_refresh()
+
+
+func _calc_refresh() -> void:
+	calc_display.text = calc_entry
+	calc_expr.text = "%s %s" % [format_number(calc_acc), calc_op] if calc_op != "" else ""
+
+
+# --- Look -------------------------------------------------------------
+
+func _accent_box() -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = COL_ACCENT
+	sb.set_corner_radius_all(6)
+	sb.set_content_margin_all(6)
+	return sb
 
 
 func _make_theme() -> Theme:
