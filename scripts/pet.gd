@@ -18,6 +18,7 @@ const BOX_LINES := [
 	"God, That's Good!",
 	"드셔봐요, 러빗부인 파이\n비교할 수 없이 맛있어",
 ]
+const WALK_SHOUT := "우와~~~"
 const PETTABLE := ["idle", "walk", "look", "wave", "hop", "petted"]
 
 const COL_OUTLINE := Color("#4a3228")
@@ -469,6 +470,18 @@ func _st_walk(d: float) -> void:
 
 	if fmod(st, 1.6) < d and randf() < 0.5:
 		_spawn_note()
+
+	# every now and then, out of nowhere: "우와~~~"
+	if bubble_left <= 0.0 and st > 0.8 and randf() < d * 0.15:
+		_say(WALK_SHOUT, 1.6)
+		_spawn_spark(_anchor_of(Vector2(randf_range(-30, 30), -150)))
+	if bubble_text == WALK_SHOUT and bubble_left > 0.0:
+		pose.face = "happy"
+		pose.blush = 0.7
+		pose.arm_l = 110.0 + s * 15.0
+		pose.arm_r = -110.0 + s * 15.0
+		pose.look.y = -0.6
+
 	if _check_ground():
 		return
 	if st > state_dur:
