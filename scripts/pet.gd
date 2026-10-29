@@ -6,10 +6,13 @@ extends Node2D
 
 const PartData := preload("res://scripts/part_data.gd")
 
-const BASE_SIZE := Vector2(240, 270)   # window size at scale 1 (units)
-const FEET := Vector2(120, 264)        # where the feet touch the ground inside the window
+const BASE_SIZE := Vector2(380, 340)   # window size at scale 1 (units)
+const FEET := Vector2(190, 334)        # where the feet touch the ground inside the window
 const WALK_SPEED := 34.0               # units/s
 const GRAVITY := 2600.0                # units/s^2
+const LOGO_WIDTH := 320.0              # stamped logo width (units), about twice Tobi
+const STAMP_LIFE := 3.0                # seconds the stamped logo stays on screen
+const COL_STAMP := Color("#b51f2b")
 const SETTINGS_PATH := "user://settings.cfg"
 const SIZE_LEVELS := [0.75, 1.0, 1.4, 1.9]
 const SIZE_NAMES := ["작게", "보통", "크게", "아주 크게"]
@@ -54,7 +57,7 @@ const FACES := {
 	"drunk": ["closed", "open_smile", "worried"],
 }
 
-enum { M_BOX, M_WIG, M_DRINK, M_PIE, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_QUIT, M_SIZE0 = 100 }
+enum { M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_QUIT, M_SIZE0 = 100 }
 
 
 class Pose:
@@ -101,6 +104,7 @@ class Particle:
 
 
 var tex := {}
+var logo_tex: Texture2D
 var font: SystemFont
 var bubble_style := StyleBoxFlat.new()
 var menu: PopupMenu
@@ -167,6 +171,10 @@ var max_fall_speed := 0.0
 var greet_after_land := true
 var hic_time := -10.0
 
+var stamp_t := 99.0            # time since the logo was stamped
+var stamp_pos := Vector2.ZERO  # logo centre (anchor space)
+var stamp_rot := 0.0
+
 var last_region := Rect2i()
 var region_full := false
 
@@ -179,12 +187,8 @@ func _ready() -> void:
 	randomize()
 	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	for part_name in PartData.PIVOTS:
-		var src: Texture2D = load("res://assets/parts/%s.png" % part_name)
-		var img := src.get_image()
-		if img.is_compressed():
-			img.decompress()
-		img.generate_mipmaps()
-		tex[part_name] = ImageTexture.create_from_image(img)
+		tex[part_name] = _load_mipmapped("res://assets/parts/%s.png" % part_name)
+	logo_tex = _load_mipmapped("res://assets/logo/sweeney_logo.png")
 
 	font = SystemFont.new()
 	font.font_names = PackedStringArray(["Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", "NanumGothic", "sans-serif"])
@@ -205,6 +209,15 @@ func _ready() -> void:
 		usable.position.y + 160.0 * pet_scale)
 	vel = Vector2.ZERO
 	_enter("fall")
+
+
+func _load_mipmapped(path: String) -> Texture2D:
+	var src: Texture2D = load(path)
+	var img := src.get_image()
+	if img.is_compressed():
+		img.decompress()
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
 
 
 func _load_settings() -> void:
@@ -231,6 +244,7 @@ func _build_menu() -> void:
 	menu.add_item("가발 벗기", M_WIG)
 	menu.add_item("위스키 마시기", M_DRINK)
 	menu.add_item("파이 서빙하기", M_PIE)
+	menu.add_item("로고 도장 쾅!", M_STAMP)
 	menu.add_item("손 흔들기", M_WAVE)
 	menu.add_item("깡총 뛰기", M_HOP)
 	menu.add_item("낮잠 자기", M_SLEEP)
@@ -262,6 +276,7 @@ func _on_menu(id: int) -> void:
 		M_WIG: _start_action("wig")
 		M_DRINK: _start_action("drink")
 		M_PIE: _start_action("pie")
+		M_STAMP: _start_action("stamp")
 		M_WAVE: _start_action("wave")
 		M_HOP: _start_action("hop")
 		M_SLEEP: _start_action("sleep")
@@ -323,6 +338,7 @@ func _process(delta: float) -> void:
 		"wig": _st_wig(d)
 		"drink": _st_drink(d)
 		"pie": _st_pie(d)
+		"stamp": _st_stamp(d)
 		"sleep": _st_sleep(d)
 		"wake": _st_wake(d)
 		"poke": _st_poke(d)
@@ -336,6 +352,7 @@ func _process(delta: float) -> void:
 	_update_blink(d)
 	_update_particles(d)
 	_update_box(d)
+	stamp_t += d
 	if bubble_left > 0.0:
 		bubble_left -= d
 		bubble_t += d
@@ -365,6 +382,13 @@ func _enter(s: String) -> void:
 			wig_attached = true
 			wig_rot = 0.0
 			wig_off = Vector2.ZERO
+		"stamp":
+			# make room so the whole logo lands on screen; Tobi stays where he is
+			var s_px := pet_scale
+			var half := (LOGO_WIDTH * 0.5 + 12.0) * s_px
+			var target := clampf(pos.x, usable.position.x + half, maxf(usable.position.x + half, usable.end.x - half))
+			char_off.x = (pos.x - target) / s_px
+			pos.x = target
 		"box":
 			var s_px := pet_scale
 			side = facing
@@ -417,6 +441,9 @@ func _pick_next() -> void:
 
 
 func _cleanup_specials() -> void:
+	if stamp_t < STAMP_LIFE:
+		stamp_pos.x -= char_off.x
+		stamp_t = maxf(stamp_t, STAMP_LIFE - 0.25)
 	if char_off != Vector2.ZERO:
 		pos.x += char_off.x * pet_scale
 		char_off = Vector2.ZERO
@@ -486,6 +513,9 @@ func _st_walk(d: float) -> void:
 
 	if fmod(st, 1.6) < d and randf() < 0.5:
 		_spawn_note()
+	if st > 1.0 and randf() < d * 0.06:
+		_enter("stamp")
+		return
 
 	# every now and then, out of nowhere: "우와~~~"
 	if bubble_left <= 0.0 and st > 0.8 and randf() < d * 0.15:
@@ -938,6 +968,72 @@ func _st_pie(d: float) -> void:
 		_spawn("steam", _anchor_of(Vector2(randf_range(-10, 10), -50 + pose.prop_off.y)), Vector2(0, -16), 1.2)
 
 
+## Out of nowhere: a giant rubber stamp, slammed onto the screen.
+func _st_stamp(_d: float) -> void:
+	var hold := -35.0
+	pose.arms_front = true
+	pose.prop = "stamp"
+	pose.prop_hand = "both"
+	pose.blush = 0.5
+	pose.arm_l = hold
+	if st < 0.35:
+		pose.arm_l = lerpf(12.0, hold, _smooth(st / 0.2))
+		pose.prop_scale = _ease_out_back(st / 0.35)
+		pose.face = "hehe"
+		if _once("pop"):
+			_spawn_spark(_anchor_of(Vector2(-24, -60)))
+	elif st < 0.8:
+		# wind up
+		var a := _smooth((st - 0.35) / 0.35)
+		pose.prop_scale = 1.0 - 0.15 * a
+		pose.prop_off = Vector2(0, 3.0 * a)
+		pose.squash = Vector2(1.0 + 0.08 * a, 1.0 - 0.1 * a)
+		pose.head_off.y = 2.0 * a
+		pose.face = "effort"
+	elif st < 1.3:
+		var g := st - 0.8
+		if _once("slam"):
+			stamp_t = 0.0
+			stamp_pos = Vector2(0, -212)
+			stamp_rot = randf_range(-0.09, 0.03)
+			_spawn_text(_anchor_of(Vector2(44, -150)), "쾅!", 22.0, COL_STAMP)
+			for i in 12:
+				var e := Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0))
+				if absf(e.x) > absf(e.y):
+					e.x = signf(e.x)
+				else:
+					e.y = signf(e.y)
+				var ip := _spawn("ink", stamp_pos + e * Vector2(LOGO_WIDTH * 0.5 + 6.0, 62.0), Vector2.ZERO, STAMP_LIFE - 0.1, randf_range(1.5, 4.0))
+				ip.color = COL_STAMP
+		# thrust the stamp at the screen
+		var k := exp(-g * 9.0)
+		pose.prop_scale = 1.0 + 0.9 * k
+		pose.prop_off = Vector2(0, -6.0 * k)
+		pose.root.y = -sin(minf(g / 0.3, 1.0) * PI) * 8.0
+		pose.squash = Vector2(1.0 - 0.06 * k, 1.0 + 0.08 * k)
+		pose.face = "shout"
+		pose.mouth_open = k
+	elif st < 3.4:
+		pose.face = "happy" if fmod(st, 1.0) < 0.6 else "hehe"
+		pose.blush = 0.8
+		pose.look = Vector2(0, -1)
+		pose.head_rot = sin(st * 3.0) * 0.05
+		if st > 1.6 and _once("shine"):
+			for i in 3:
+				_spawn_spark(stamp_pos + Vector2(randf_range(-150, 150), randf_range(-50, 50)))
+	elif st < 3.8:
+		var g := _smooth((st - 3.4) / 0.4)
+		pose.prop_scale = 1.0 - g
+		pose.arm_l = lerpf(hold, 12.0, g)
+	else:
+		stamp_pos.x -= char_off.x
+		pos.x += char_off.x * pet_scale
+		char_off = Vector2.ZERO
+		_enter("walk")
+		return
+	pose.arm_r = -pose.arm_l
+
+
 func _st_sleep(d: float) -> void:
 	var a := _smooth(st / 0.8)
 	var br := sin(st * 1.7)
@@ -1214,7 +1310,7 @@ func _on_click() -> void:
 			if st > 1.25 and st < stomp_end:
 				box_line = (box_line + 1 + randi() % (BOX_LINES.size() - 1)) % BOX_LINES.size()
 				stomp_end = maxf(stomp_end, st + 2.5)
-		"wig", "drink", "pie", "fall", "drag", "land", "dizzy":
+		"wig", "drink", "pie", "stamp", "fall", "drag", "land", "dizzy":
 			_spawn_heart(_anchor_of(Vector2(randf_range(-20, 20), -140)))
 		_:
 			poke_times.append(t_total)
@@ -1265,6 +1361,8 @@ func _update_passthrough() -> void:
 	var r := Rect2(char_off + pose.root + Vector2(-64, -160), Vector2(128, 168))
 	if box_visible:
 		r = r.merge(Rect2(-44, -48, 88, 52))
+	if stamp_t < STAMP_LIFE:
+		r = r.merge(Rect2(stamp_pos - Vector2(LOGO_WIDTH * 0.7, 80), Vector2(LOGO_WIDTH * 1.4, 160)))
 	if not wig_attached:
 		var wc := char_off + pose.root + Vector2(facing * wig_c.x, wig_c.y)
 		r = r.merge(Rect2(wc - Vector2(58, 50), Vector2(116, 100)))
@@ -1390,11 +1488,23 @@ func _spawn_anger() -> void:
 # ======================================================================
 
 func _draw() -> void:
+	_draw_stamp()
 	if box_visible and box_scale > 0.01:
 		_part("box", view_xf * Transform2D(0.0, Vector2(box_scale * (2.0 - box_sq), box_scale * box_sq), 0.0, Vector2.ZERO))
 	_draw_char()
 	_draw_particles()
 	_draw_bubble()
+
+
+func _draw_stamp() -> void:
+	if stamp_t >= STAMP_LIFE or logo_tex == null:
+		return
+	var a := clampf((STAMP_LIFE - stamp_t) / 0.6, 0.0, 1.0) * clampf(stamp_t / 0.06, 0.0, 1.0)
+	var sc := lerpf(1.35, 1.0, _smooth(stamp_t / 0.12))
+	var shake := Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * 5.0 * exp(-stamp_t * 10.0)
+	var k := LOGO_WIDTH / float(logo_tex.get_width()) * sc
+	draw_set_transform_matrix(view_xf * Transform2D(stamp_rot, stamp_pos + shake) * Transform2D(0.0, Vector2(k, k), 0.0, Vector2.ZERO))
+	draw_texture(logo_tex, -logo_tex.get_size() * 0.5, Color(1, 1, 1, a))
 
 
 func _part(part_name: String, xf: Transform2D, flip := false) -> void:
@@ -1590,6 +1700,9 @@ func _draw_particles() -> void:
 				_note(p.pos + Vector2(sin(age * 5.0) * 3.0, 0), Color(p.color, a))
 			"sweat":
 				_drop(p.pos, 3.0, Color(COL_SWEAT, a))
+			"ink":
+				var g := clampf((age - 0.05) / 0.1, 0.0, 1.0)
+				_ell(p.pos, p.size * g, p.size * g * 0.85, Color(p.color, a * 0.9))
 			"steam":
 				var g := age / p.max_life
 				var sp := PackedVector2Array()
@@ -1661,6 +1774,8 @@ func _text_px(at: Vector2, text: String, size_u: float, col: Color, outline_col:
 # ----------------------------------------------------------------------
 
 func _ell(c: Vector2, rx: float, ry: float, col: Color, rot := 0.0) -> void:
+	if rx < 0.05 or ry < 0.05 or col.a <= 0.0:
+		return
 	var pts := PackedVector2Array()
 	for i in 20:
 		var a := TAU * i / 20.0
