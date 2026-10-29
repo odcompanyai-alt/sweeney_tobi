@@ -1490,6 +1490,7 @@ func _st_offer(_d: float) -> void:
 func _open_launcher() -> void:
 	pressing = false
 	launcher_t = 0.0
+	bubble_left = 0.0
 	launcher_off = char_off
 	_spawn_spark(_anchor_of(Vector2(0, -180)))
 	if state in CALM:
@@ -1498,7 +1499,8 @@ func _open_launcher() -> void:
 
 func _launcher_pos(i: int) -> Vector2:
 	var x := -72.0 + i * 48.0
-	return launcher_off + Vector2(x, -186.0 + absf(x) * 0.12)
+	# sits above the speech-bubble area so the two never overlap
+	return launcher_off + Vector2(x, -230.0 + absf(x) * 0.12)
 
 
 func _hit_launcher(local_px: Vector2) -> int:
@@ -1752,7 +1754,7 @@ func _update_hover(d: float) -> void:
 		hover_shown = false
 		return
 	hover_t += d
-	if hover_t > 0.35 and not hover_shown and bubble_left <= 0.0:
+	if hover_t > 0.35 and not hover_shown and bubble_left <= 0.0 and launcher_t > LAUNCHER_LIFE:
 		hover_shown = true
 		var hours := int(together_sec / 3600.0)
 		var span := "%d시간" % hours
@@ -1870,7 +1872,7 @@ func _update_passthrough() -> void:
 	if box_visible:
 		r = r.merge(Rect2(-44, -48, 88, 52))
 	if launcher_t < LAUNCHER_LIFE:
-		r = r.merge(Rect2(launcher_off + Vector2(-100, -216), Vector2(200, 72)))
+		r = r.merge(Rect2(launcher_off + Vector2(-100, -260), Vector2(200, 76)))
 	if stamp_t < STAMP_LIFE:
 		r = r.merge(Rect2(stamp_pos - Vector2(LOGO_WIDTH * 0.7, 80), Vector2(LOGO_WIDTH * 1.4, 160)))
 	if not wig_attached:
