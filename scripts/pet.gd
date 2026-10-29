@@ -5,6 +5,7 @@ extends Node2D
 ## transparent, always-on-top window around the screen.
 
 const PartData := preload("res://scripts/part_data.gd")
+const Widgets := preload("res://scripts/widgets.gd")
 
 const BASE_SIZE := Vector2(380, 340)   # window size at scale 1 (units)
 const FEET := Vector2(190, 334)        # where the feet touch the ground inside the window
@@ -22,6 +23,11 @@ const BOX_LINES := [
 	"드셔봐요, 러빗부인 파이\n비교할 수 없이 맛있어",
 ]
 const WALK_SHOUT := "우와~~~"
+const CALM := ["idle", "walk", "look", "wave", "hop", "petted", "poke", "pout", "sit", "watch", "goto", "offer"]
+const CHEER_LINES := ["해냈다!", "최고예요!", "하나 끝!", "잘했어요!", "멋져요!"]
+const CONFETTI_COLORS := [Color("#ff698c"), Color("#ffd65a"), Color("#7fb6ff"), Color("#9ad48a"), Color("#e8743b")]
+const LONG_PRESS := 0.55
+const LAUNCHER_LIFE := 6.0
 const PETTABLE := ["idle", "walk", "look", "wave", "hop", "petted"]
 
 const COL_OUTLINE := Color("#4a3228")
@@ -57,7 +63,7 @@ const FACES := {
 	"drunk": ["closed", "open_smile", "worried"],
 }
 
-enum { M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_QUIT, M_SIZE0 = 100 }
+enum { M_TODO, M_MEMO, M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_QUIT, M_SIZE0 = 100 }
 
 
 class Pose:
@@ -176,6 +182,13 @@ var save_timer := 30.0
 var hover_t := 0.0
 var hover_shown := false
 
+var widgets: Widgets
+var widget_focus := ""          # "todo" / "memo": the widget Tobi keeps company
+var memo_type_t := -10.0        # last time something was typed in the memo
+var press_time := 0.0
+var launcher_t := 99.0          # time since the long-press launcher opened
+var launcher_off := Vector2.ZERO
+
 var stamp_t := 99.0            # time since the logo was stamped
 var stamp_pos := Vector2.ZERO  # logo centre (anchor space)
 var stamp_rot := 0.0
@@ -204,6 +217,12 @@ func _ready() -> void:
 
 	_load_settings()
 	_build_menu()
+	widgets = Widgets.new()
+	add_child(widgets)
+	widgets.setup(auto_scale)
+	widgets.todo_completed.connect(_on_todo_completed)
+	widgets.memo_typed.connect(_on_memo_typed)
+	widgets.focused.connect(func(kind: String) -> void: widget_focus = kind)
 	_refresh_screen()
 	_apply_scale()
 	last_mouse = Vector2(DisplayServer.mouse_get_position())
@@ -247,6 +266,9 @@ func _save_settings() -> void:
 
 func _build_menu() -> void:
 	menu = PopupMenu.new()
+	menu.add_check_item("할 일 목록", M_TODO)
+	menu.add_check_item("메모장", M_MEMO)
+	menu.add_separator()
 	menu.add_item("박스 위에서 외치기", M_BOX)
 	menu.add_item("가발 벗기", M_WIG)
 	menu.add_item("위스키 마시기", M_DRINK)
@@ -269,6 +291,8 @@ func _sync_menu() -> void:
 	for i in SIZE_LEVELS.size():
 		menu.set_item_checked(menu.get_item_index(M_SIZE0 + i), i == size_level)
 	menu.set_item_checked(menu.get_item_index(M_STILL), stay_still)
+	menu.set_item_checked(menu.get_item_index(M_TODO), widgets.is_open("todo"))
+	menu.set_item_checked(menu.get_item_index(M_MEMO), widgets.is_open("memo"))
 
 
 func _open_menu() -> void:
@@ -279,6 +303,8 @@ func _open_menu() -> void:
 
 func _on_menu(id: int) -> void:
 	match id:
+		M_TODO: _toggle_widget("todo")
+		M_MEMO: _toggle_widget("memo")
 		M_BOX: _start_action("box")
 		M_WIG: _start_action("wig")
 		M_DRINK: _start_action("drink")
@@ -292,6 +318,7 @@ func _on_menu(id: int) -> void:
 			_save_settings()
 		M_QUIT:
 			_save_settings()
+			widgets.save()
 			get_tree().quit()
 		_:
 			if id >= M_SIZE0:
@@ -352,6 +379,11 @@ func _process(delta: float) -> void:
 		"drink": _st_drink(d)
 		"pie": _st_pie(d)
 		"stamp": _st_stamp(d)
+		"goto": _st_goto(d)
+		"sit": _st_sit(d)
+		"watch": _st_watch(d)
+		"cheer": _st_cheer(d)
+		"offer": _st_offer(d)
 		"sleep": _st_sleep(d)
 		"wake": _st_wake(d)
 		"poke": _st_poke(d)
@@ -366,6 +398,7 @@ func _process(delta: float) -> void:
 	_update_particles(d)
 	_update_box(d)
 	stamp_t += d
+	launcher_t += d
 	if bubble_left > 0.0:
 		bubble_left -= d
 		bubble_t += d
@@ -428,6 +461,14 @@ func _once(key: String) -> bool:
 
 
 func _pick_next() -> void:
+	var tx := _widget_target_x()
+	if not is_nan(tx):
+		if absf(tx - pos.x) > 6.0 * pet_scale:
+			_enter("goto")
+			return
+		if _active_widget() == widgets.memo_win:
+			_enter("sit")
+			return
 	var opts := {
 		"walk": 0.0 if stay_still else 36.0,
 		"look": 10.0,
@@ -441,6 +482,8 @@ func _pick_next() -> void:
 	}
 	if last_action in opts and last_action != "walk":
 		opts[last_action] = 0.0
+	if not is_nan(tx):
+		opts["walk"] = 0.0
 	var total := 0.0
 	for k in opts:
 		total += float(opts[k])
@@ -502,8 +545,7 @@ func _st_idle(_d: float) -> void:
 		_pick_next()
 
 
-func _st_walk(d: float) -> void:
-	var ph := st * 8.0
+func _walk_pose(ph: float) -> float:
 	var s := sin(ph)
 	pose.root.y = -absf(s) * 3.0
 	pose.root_rot = s * 0.06
@@ -513,6 +555,11 @@ func _st_walk(d: float) -> void:
 	pose.arm_r = -12.0 + s * 22.0
 	pose.head_rot = -s * 0.04
 	pose.scarf_rot = -s * 0.15
+	return s
+
+
+func _st_walk(d: float) -> void:
+	var s := _walk_pose(st * 8.0)
 
 	var px := pet_scale
 	pos.x += facing * WALK_SPEED * px * d
@@ -1048,6 +1095,228 @@ func _st_stamp(_d: float) -> void:
 	pose.arm_r = -pose.arm_l
 
 
+# ----------------------------------------------------------------------
+# Widgets: keeping Tobi company with the To-Do list and the memo pad
+# ----------------------------------------------------------------------
+
+func _active_widget() -> Window:
+	if widgets == null:
+		return null
+	var m := widgets.is_open("memo")
+	var t := widgets.is_open("todo")
+	if m and (widget_focus == "memo" or not t):
+		return widgets.memo_win
+	if t:
+		return widgets.todo_win
+	return null
+
+
+## Screen x where Tobi should stand next to the active widget (NAN if none).
+func _widget_target_x() -> float:
+	var w := _active_widget()
+	if w == null:
+		return NAN
+	var px := pet_scale
+	var lo := usable.position.x + 60.0 * px
+	var hi := usable.end.x - 60.0 * px
+	var left := float(w.position.x) - 55.0 * px
+	var right := float(w.position.x + w.size.x) + 55.0 * px
+	var tx := left if absf(left - pos.x) <= absf(right - pos.x) else right
+	if tx < lo or tx > hi:
+		tx = right if tx == left else left
+	return clampf(tx, lo, hi)
+
+
+## Turns Tobi toward the active widget; returns how much he has to look up.
+func _face_widget() -> float:
+	var w := _active_widget()
+	if w == null:
+		return 0.0
+	facing = 1.0 if float(w.position.x) + w.size.x * 0.5 >= pos.x else -1.0
+	return -0.8 if float(w.position.y + w.size.y) < pos.y - 150.0 * pet_scale else -0.3
+
+
+func _toggle_widget(kind: String) -> void:
+	widgets.toggle(kind, pos, usable)
+	if widgets.is_open(kind):
+		widget_focus = kind
+		_say("할 일 같이 해요!" if kind == "todo" else "뭐 적을 거예요?", 1.6)
+		if state in CALM:
+			_enter("goto")
+
+
+func _on_todo_completed(_text: String) -> void:
+	widget_focus = "todo"
+	if state in ["drag", "fall"]:
+		return
+	_cleanup_specials()
+	_enter("cheer")
+
+
+func _on_memo_typed() -> void:
+	memo_type_t = t_total
+	widget_focus = "memo"
+	if state in CALM and state != "watch" and state != "goto":
+		var tx := _widget_target_x()
+		_enter("watch" if absf(tx - pos.x) <= 6.0 * pet_scale else "goto")
+
+
+func _st_goto(d: float) -> void:
+	var tx := _widget_target_x()
+	if is_nan(tx):
+		_enter("idle")
+		return
+	var dx := tx - pos.x
+	if absf(dx) < 3.0:
+		pos.x = tx
+		if _active_widget() == widgets.memo_win:
+			_enter("watch" if t_total - memo_type_t < 2.0 else "sit")
+		else:
+			_face_widget()
+			_enter("idle")
+		return
+	facing = signf(dx)
+	var step := WALK_SPEED * 1.8 * pet_scale * d
+	pos.x += clampf(dx, -step, step)
+	_walk_pose(st * 12.0)
+
+
+## Sitting in front of the memo pad, swinging his feet (and dozing off after a while).
+func _st_sit(d: float) -> void:
+	if _active_widget() != widgets.memo_win:
+		_enter("idle")
+		return
+	var tx := _widget_target_x()
+	if absf(tx - pos.x) > 40.0 * pet_scale:
+		_enter("goto")
+		return
+	var up := _face_widget()
+	var a := _smooth(st / 0.35)
+	var dozing := st > 25.0
+	var br := sin(st * 2.0)
+	pose.body_off.y = 7.0 * a
+	pose.foot_l = Vector2(-5.0 * a, 0)
+	pose.foot_r = Vector2(5.0 * a, 0)
+	pose.arm_l = 8.0 + br * 2.0
+	pose.arm_r = -pose.arm_l
+	pose.squash = Vector2(1.0 - br * 0.01, 1.0 + br * 0.015)
+	if dozing:
+		var z := _smooth((st - 25.0) / 1.0)
+		pose.face = "sleep"
+		pose.head_rot = 0.14 * z
+		pose.nose_bubble = z * (0.5 + 0.5 * sin(st * 1.7))
+		if fmod(st, 1.4) < d:
+			_spawn_z()
+	else:
+		pose.foot_l.y = -maxf(0.0, sin(st * 3.0)) * 2.5 * a
+		pose.foot_r.y = -maxf(0.0, sin(st * 3.0 + PI)) * 2.5 * a
+		pose.look = Vector2(0.8, up)
+		pose.head_rot = 0.05 * sin(st * 0.9)
+		if fmod(st, 7.0) < d and st > 1.0:
+			_spawn_note()
+
+
+## Peeking at what is being written: tiptoes, leaning in, reading along and nodding.
+func _st_watch(d: float) -> void:
+	if _active_widget() != widgets.memo_win:
+		_enter("idle")
+		return
+	if t_total - memo_type_t > 2.5:
+		_enter("sit")
+		return
+	var up := _face_widget()
+	pose.root_rot = 0.06 * facing
+	pose.squash = Vector2(0.98, 1.03)
+	pose.foot_l.y = -1.5
+	pose.foot_r.y = -1.5
+	pose.look = Vector2(0.6 + sin(st * 7.0) * 0.3, up)
+	pose.head_rot = sin(st * 2.2) * 0.05
+	pose.head_off.y = absf(sin(st * 4.5)) * 1.2
+	pose.arm_l = 10.0
+	pose.arm_r = -150.0 + sin(st * 3.0) * 4.0   # hand on chin, "hmm..."
+	pose.arms_front = true
+	pose.face = "happy" if fmod(st, 4.0) > 3.2 else "normal"
+	pose.blush = 0.45
+	if fmod(st, 2.6) < d and st > 0.5:
+		var r := randi() % 4
+		if r == 3:
+			_spawn_note()
+		else:
+			_spawn_text(_anchor_of(Vector2(30, -150)), ["오~", "흠흠", "?"][r], 13.0, COL_TEXT)
+
+
+## A To-Do item got done: bounce, bounce, bounce!
+func _st_cheer(d: float) -> void:
+	if _active_widget() == widgets.todo_win:
+		_face_widget()
+	if _once("start"):
+		_say(CHEER_LINES[randi() % CHEER_LINES.size()], 1.8)
+		for i in 16:
+			var c := _spawn("confetti", _anchor_of(Vector2(randf_range(-20, 20), -120)),
+				Vector2(randf_range(-110, 110), randf_range(-190, -80)), randf_range(1.0, 1.6), randf_range(1.0, 1.6), 320.0)
+			c.color = CONFETTI_COLORS[randi() % CONFETTI_COLORS.size()]
+			c.spin = randf_range(-10.0, 10.0)
+		_spawn_heart(_anchor_of(Vector2(-30, -140)))
+		_spawn_heart(_anchor_of(Vector2(30, -150)))
+	var cyc := 0.5
+	var k := int(st / cyc)
+	if k >= 4:
+		_enter("idle")
+		return
+	var f := fmod(st, cyc) / cyc
+	pose.face = "happy"
+	pose.blush = 1.0
+	pose.arm_l = 150.0 + sin(st * 20.0) * 12.0
+	pose.arm_r = -150.0 - sin(st * 20.0 + 1.0) * 12.0
+	if f < 0.15:
+		var a := f / 0.15
+		pose.squash = Vector2(1.0 + 0.12 * a, 1.0 - 0.14 * a)
+	else:
+		var g := (f - 0.15) / 0.85
+		pose.root.y = -sin(g * PI) * 22.0
+		pose.squash = Vector2(0.93, 1.09).lerp(Vector2.ONE, g)
+		pose.foot_l.y = -2.0
+		pose.foot_r.y = -2.0
+		pose.scarf_rot = -sin(g * PI) * 0.35
+	if f > 0.9 and _once("land%d" % k):
+		_dust_burst(_anchor_of(Vector2.ZERO), 2)
+		_spawn_spark(_anchor_of(Vector2(randf_range(-40, 40), randf_range(-150, -100))))
+
+
+## Long-press launcher: Tobi holds up the widget buttons.
+func _st_offer(_d: float) -> void:
+	var a := _smooth(st / 0.25)
+	pose.arm_l = lerpf(12.0, 140.0, a) + sin(st * 6.0) * 5.0
+	pose.arm_r = -pose.arm_l
+	pose.face = "happy"
+	pose.blush = 0.6
+	pose.look.y = -0.8
+	if launcher_t > LAUNCHER_LIFE:
+		_enter("idle")
+
+
+func _open_launcher() -> void:
+	pressing = false
+	launcher_t = 0.0
+	launcher_off = char_off
+	_spawn_spark(_anchor_of(Vector2(0, -180)))
+	if state in CALM:
+		_enter("offer")
+
+
+func _launcher_pos(i: int) -> Vector2:
+	return launcher_off + Vector2(-44.0 if i == 0 else 44.0, -182.0)
+
+
+func _hit_launcher(local_px: Vector2) -> int:
+	if launcher_t > LAUNCHER_LIFE:
+		return -1
+	for i in 2:
+		if local_px.distance_to(view_xf * _launcher_pos(i)) < 20.0 * pet_scale:
+			return i
+	return -1
+
+
 func _st_sleep(d: float) -> void:
 	var a := _smooth(st / 0.8)
 	var br := sin(st * 1.7)
@@ -1238,6 +1507,13 @@ func _input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
+				var btn := _hit_launcher(mb.position)
+				if btn >= 0:
+					launcher_t = 99.0
+					_toggle_widget("todo" if btn == 0 else "memo")
+					return
+				if launcher_t < LAUNCHER_LIFE:
+					launcher_t = 99.0
 				if not _hit_char(mb.position):
 					return
 				if mb.double_click:
@@ -1246,6 +1522,7 @@ func _input(event: InputEvent) -> void:
 						_start_action("hop")
 					return
 				pressing = true
+				press_time = t_total
 				press_screen = Vector2(DisplayServer.mouse_get_position())
 			else:
 				if dragging:
@@ -1269,6 +1546,8 @@ func _notification(what: int) -> void:
 		_end_drag()
 	elif what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_PREDELETE:
 		_save_settings()
+		if widgets:
+			widgets.save()
 
 
 ## Resting the mouse on Tobi tells how long you have been together.
@@ -1294,6 +1573,8 @@ func _poll_mouse(d: float) -> void:
 	var mv := (m - last_mouse) / maxf(d, 0.001)
 	if pressing and not dragging and m.distance_to(press_screen) > 6.0:
 		_begin_drag(m)
+	elif pressing and not dragging and t_total - press_time > LONG_PRESS:
+		_open_launcher()
 	if dragging:
 		mouse_hist.append([t_total, m])
 		while mouse_hist.size() > 2 and t_total - float(mouse_hist[0][0]) > 0.1:
@@ -1344,7 +1625,7 @@ func _on_click() -> void:
 			if st > 1.25 and st < stomp_end:
 				box_line = (box_line + 1 + randi() % (BOX_LINES.size() - 1)) % BOX_LINES.size()
 				stomp_end = maxf(stomp_end, st + 2.5)
-		"wig", "drink", "pie", "stamp", "fall", "drag", "land", "dizzy":
+		"wig", "drink", "pie", "stamp", "cheer", "fall", "drag", "land", "dizzy":
 			_spawn_heart(_anchor_of(Vector2(randf_range(-20, 20), -140)))
 		_:
 			poke_times.append(t_total)
@@ -1395,6 +1676,8 @@ func _update_passthrough() -> void:
 	var r := Rect2(char_off + pose.root + Vector2(-64, -160), Vector2(128, 168))
 	if box_visible:
 		r = r.merge(Rect2(-44, -48, 88, 52))
+	if launcher_t < LAUNCHER_LIFE:
+		r = r.merge(Rect2(launcher_off + Vector2(-72, -212), Vector2(144, 66)))
 	if stamp_t < STAMP_LIFE:
 		r = r.merge(Rect2(stamp_pos - Vector2(LOGO_WIDTH * 0.7, 80), Vector2(LOGO_WIDTH * 1.4, 160)))
 	if not wig_attached:
@@ -1527,7 +1810,36 @@ func _draw() -> void:
 		_part("box", view_xf * Transform2D(0.0, Vector2(box_scale * (2.0 - box_sq), box_scale * box_sq), 0.0, Vector2.ZERO))
 	_draw_char()
 	_draw_particles()
+	_draw_launcher()
 	_draw_bubble()
+
+
+func _draw_launcher() -> void:
+	if launcher_t > LAUNCHER_LIFE:
+		return
+	var fade := clampf((LAUNCHER_LIFE - launcher_t) / 0.3, 0.0, 1.0)
+	for i in 2:
+		var k := _ease_out_back((launcher_t - i * 0.07) / 0.25) * fade
+		if k <= 0.05:
+			continue
+		var c := _launcher_pos(i)
+		draw_set_transform_matrix(view_xf * Transform2D(0.0, Vector2(k, k), 0.0, c))
+		_ell(Vector2(0, 1.5), 17.0, 17.0, Color(0, 0, 0, 0.12))
+		_ell(Vector2.ZERO, 17.0, 17.0, Color("#fff8ec"))
+		_arc(Vector2.ZERO, 17.0, 0.0, TAU, COL_OUTLINE, 1.6)
+		if i == 0:
+			for j in 3:
+				var y := -6.0 + j * 6.0
+				_polyline(PackedVector2Array([Vector2(-9, y), Vector2(-7, y + 2), Vector2(-3.5, y - 2.5)]), Color("#5aa86a"), 1.6)
+				_line(Vector2(0, y), Vector2(9, y), COL_OUTLINE, 1.6)
+		else:
+			_ell(Vector2(-1, 0), 7.0, 9.0, Color.WHITE)
+			_arc(Vector2(-1, 0), 7.5, 0.0, TAU, COL_OUTLINE, 0.8)
+			for j in 3:
+				_line(Vector2(-5, -4.0 + j * 4.0), Vector2(3, -4.0 + j * 4.0), Color("#c9b79c"), 1.0)
+			_line(Vector2(9, -9), Vector2(2, 3), COL_LINE, 2.6)
+			_line(Vector2(2, 3), Vector2(1, 5), COL_OUTLINE, 1.4)
+		_text_px(c + Vector2(0, 27.0), "할 일" if i == 0 else "메모", 11.0, COL_OUTLINE, Color(1, 1, 1, 0.95))
 
 
 func _draw_stamp() -> void:
@@ -1734,6 +2046,11 @@ func _draw_particles() -> void:
 				_note(p.pos + Vector2(sin(age * 5.0) * 3.0, 0), Color(p.color, a))
 			"sweat":
 				_drop(p.pos, 3.0, Color(COL_SWEAT, a))
+			"confetti":
+				var cp := PackedVector2Array([Vector2(-2, -1.2), Vector2(2, -1.2), Vector2(2, 1.2), Vector2(-2, 1.2)])
+				for k in 4:
+					cp[k] = p.pos + (cp[k] * p.size).rotated(p.rot)
+				draw_colored_polygon(cp, Color(p.color, a))
 			"ink":
 				var g := clampf((age - 0.05) / 0.1, 0.0, 1.0)
 				_ell(p.pos, p.size * g, p.size * g * 0.85, Color(p.color, a * 0.9))
