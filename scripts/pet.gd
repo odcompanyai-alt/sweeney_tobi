@@ -714,7 +714,6 @@ func _st_wig(d: float) -> void:
 		elif st < 4.7:
 			if _once("toss"):
 				wig_from = wig_c
-				_say("영차!", 0.6)
 			var g := (st - 4.0) / 0.7
 			wig_c = wig_from.lerp(head_c, g) + Vector2(0, -sin(g * PI) * 55.0)
 			wig_rot = lerpf(0.0, TAU + 0.3, g)
@@ -729,22 +728,42 @@ func _st_wig(d: float) -> void:
 				wig_off = Vector2(3, 1)
 				_spawn_spark(_anchor_of(Vector2(20, -150)))
 			var g := st - 4.7
-			var fix := _smooth((g - 0.2) / 0.5)
-			wig_rot = 0.3 * (1.0 - fix) + sin(g * 20.0) * 0.03 * exp(-g * 3.0)
-			wig_off = Vector2(3, 1).lerp(Vector2.ZERO, fix)
-			var adjust := 1.0 - _smooth((g - 0.6) / 0.3)
-			pose.arm_l = lerpf(12.0, 150.0 + sin(g * 25.0) * 5.0, adjust)
-			pose.arm_r = -pose.arm_l
-			var k := exp(-g * 8.0)
-			pose.squash = Vector2(1.0 + 0.1 * k, 1.0 - 0.12 * k)
-			pose.face = "hehe"
-			pose.blush = 0.7
-			if g > 0.5 and _once("note"):
-				_spawn_note()
-			if g > 0.95:
-				wig_rot = 0.0
-				wig_off = Vector2.ZERO
-				_enter("idle")
+			if g < 2.2:
+				# hair is back! credit goes to the miracle elixir
+				var k := exp(-g * 8.0)
+				var up := _smooth((g - 0.15) / 0.2)
+				var hop := absf(sin(g * 7.0)) * up
+				pose.root.y = -hop * 6.0
+				pose.squash = Vector2(1.0 + 0.1 * k - hop * 0.03, 1.0 - 0.12 * k + hop * 0.04)
+				pose.arm_l = lerpf(140.0, 158.0 + sin(g * 14.0) * 10.0, up)
+				pose.arm_r = -158.0 - sin(g * 14.0 + 1.5) * 10.0 if up >= 1.0 else -pose.arm_l
+				pose.face = "shout" if fmod(g, 0.9) < 0.6 else "happy"
+				pose.mouth_open = 0.5 + 0.5 * absf(sin(g * 11.0))
+				pose.blush = 0.8
+				pose.scarf_rot = sin(g * 7.0) * 0.2
+				wig_rot = 0.3 + sin(g * 14.0) * 0.06
+				if g > 0.15:
+					_say("기적같은 피렐리의 묘약!", 0.3)
+				if fmod(g, 0.3) < d:
+					_spawn_spark(_anchor_of(Vector2(randf_range(-45, 45), randf_range(-175, -115))))
+				if g > 0.4 and _once("heart"):
+					_spawn_heart(_anchor_of(Vector2(-34, -150)))
+			else:
+				var h := g - 2.2
+				var fix := _smooth((h - 0.1) / 0.5)
+				wig_rot = 0.3 * (1.0 - fix) + sin(h * 20.0) * 0.03 * exp(-h * 3.0)
+				wig_off = Vector2(3, 1).lerp(Vector2.ZERO, fix)
+				var adjust := 1.0 - _smooth((h - 0.6) / 0.3)
+				pose.arm_l = lerpf(12.0, 150.0 + sin(h * 25.0) * 5.0, adjust)
+				pose.arm_r = -pose.arm_l
+				pose.face = "hehe"
+				pose.blush = 0.7
+				if h > 0.5 and _once("note"):
+					_spawn_note()
+				if h > 0.95:
+					wig_rot = 0.0
+					wig_off = Vector2.ZERO
+					_enter("idle")
 
 
 func _wig_physics(d: float) -> void:
