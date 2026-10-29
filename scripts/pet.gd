@@ -595,7 +595,7 @@ func _st_box(_d: float) -> void:
 		pose.mouth_open = 0.4 + 0.6 * absf(sin(sp * 11.0))
 		pose.head_rot = sin(sp * PI / cyc) * 0.05
 		pose.scarf_rot = sin(sp * PI / cyc) * 0.2
-		var lines := ["신사 숙녀 여러분~!", "주목해 주세요!!", "피렐리의 기적의 묘약!"]
+		var lines := ["여러분 여러분!", "주목해 주세요!!", "피렐리의 기적의 묘약!"]
 		_say(lines[mini(int(sp / 1.38), 2)], 0.3)
 	elif st < 6.2:
 		var g := (st - 5.6) / 0.6
