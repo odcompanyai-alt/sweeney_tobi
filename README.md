@@ -1,0 +1,76 @@
+# 토비 데스크톱 펫 (Tobi Desktop Pet)
+
+![미리보기](docs/preview.png)
+
+스위니 토드의 토비아스가 바탕화면 작업표시줄 위를 돌아다니는 데스크톱 펫입니다.
+Windows와 macOS를 지원합니다.
+
+## 할 수 있는 것
+
+| 동작 | 설명 |
+|---|---|
+| 🚶 걷기 / 두리번 / 콧노래 | 작업표시줄 위를 뒤뚱뒤뚱 걸어 다녀요 |
+| 📦 박스 위에서 외치기 | 피렐리의 묘약 상자에 올라가 발을 구르며 “신사 숙녀 여러분~!” |
+| 💇 가발 벗기 | 가발이 “뽁!” 하고 벗겨지면 부끄러워하다가 다시 휙 써요 |
+| 👋 손 흔들기 / 🐰 깡총 뛰기 | 하트와 반짝이가 나와요 |
+| 💤 낮잠 | 콧방울을 불며 자요. 클릭하면 깜짝 놀라 깨요 |
+| 🖱️ 클릭 | 깜짝 놀랐다가 배시시 웃어요. 연속으로 4번 찌르면 “흥!” 하고 삐져요 |
+| ✋ 쓰다듬기 | 마우스로 머리 위를 문지르면 하트가 퐁퐁 |
+| 🫳 드래그 & 던지기 | 집어 들면 발을 동동 구르고, 던지면 통통 튀어요. 세게 던지면 어지러워해요 |
+| 🖱️ 더블클릭 | 깡총 뛰기 |
+| 🖱️ 오른쪽 클릭 | 메뉴: 동작 실행, 크기 조절(4단계), 제자리에 있기, 종료 |
+
+## 실행 방법 (사용자용)
+
+### Windows
+1. `TobiPet-windows.zip`을 받아 압축을 풉니다.
+2. `TobiPet.exe`를 실행합니다.
+3. “Windows의 PC 보호” 창이 뜨면 **추가 정보 → 실행**을 누릅니다.
+   (코드 서명 인증서를 사지 않은 인디 앱이라서 뜨는 경고입니다.)
+
+### macOS
+1. `TobiPet-macos.zip`을 받아 압축을 풀고 `Tobi Desktop Pet.app`을 응용 프로그램 폴더로 옮깁니다.
+2. 처음에는 앱을 **우클릭 → 열기**로 실행합니다.
+3. 그래도 막히면 **시스템 설정 → 개인정보 보호 및 보안**에서 “그래도 열기”를 누르거나,
+   터미널에 아래 명령을 입력한 뒤 다시 실행합니다.
+   ```bash
+   xattr -cr "/Applications/Tobi Desktop Pet.app"
+   ```
+
+종료는 토비를 **오른쪽 클릭 → 종료**로 합니다.
+
+## 개발
+
+- 엔진: [Godot 4.4](https://godotengine.org/) (GL Compatibility 렌더러)
+- `scripts/pet.gd`: 펫의 전부(창 제어, 상태 머신, 애니메이션, 그리기)
+- `assets/parts/*.png`: 캐릭터 파츠 스프라이트
+- `tools/make_parts.py`: 파츠 스프라이트를 다시 그리는 스크립트 (`python3 tools/make_parts.py`)
+- `tools/preview.py`: 파츠 조합 미리보기와 아이콘 생성
+
+로컬 실행: Godot 4.4 에디터로 `project.godot`을 열고 F5를 누릅니다.
+
+### 캐릭터 그림 바꾸기
+`assets/parts/`의 PNG를 같은 크기·같은 기준점(pivot)으로 덮어쓰면 됩니다.
+크기가 달라지면 `scripts/part_data.gd`의 pivot 값을 함께 고쳐 주세요.
+얼굴(눈·입·볼터치)은 표정 변화를 위해 코드로 그립니다(`_draw_face`).
+
+## 빌드 & 배포 (자동)
+
+`.github/workflows/build.yml`이 GitHub Actions에서 자동으로 빌드합니다.
+
+- `main` 브랜치에 push하면 Windows와 macOS 빌드가 Actions의 **Artifacts**로 올라갑니다.
+- `v0.1.0`처럼 `v`로 시작하는 태그를 push하면 **GitHub Releases**에 zip 파일이 올라갑니다.
+  ```bash
+  git tag v0.1.0
+  ```
+  ```bash
+  git push origin v0.1.0
+  ```
+- itch.io 자동 업로드를 쓰려면 저장소 설정에 다음 두 가지를 추가합니다.
+  - Secrets → `BUTLER_API_KEY`: itch.io → Settings → API keys에서 발급
+  - Variables → `ITCH_TARGET`: `계정명/게임주소` (예: `odcompany/tobi-pet`)
+
+## 라이선스 / 주의
+
+토비아스는 뮤지컬·영화 *Sweeney Todd*의 캐릭터입니다. 이 프로젝트는 비상업적 팬메이드 작품이며,
+유료로 판매하거나 공식 상품처럼 배포하지 않도록 주의해 주세요.

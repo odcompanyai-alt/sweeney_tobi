@@ -1,0 +1,74 @@
+name: Build Tobi Pet
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.4.1
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.4.1
+    permissions:
+      contents: write
+    env:
+      BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+      ITCH_TARGET: ${{ vars.ITCH_TARGET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up export templates
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates/
+          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+
+      - name: Import assets
+        run: godot --headless --import
+
+      - name: Export Windows
+        run: |
+          mkdir -p build/windows
+          godot --headless --export-release "Windows Desktop" build/windows/TobiPet.exe
+          test -f build/windows/TobiPet.exe
+
+      - name: Export macOS
+        run: |
+          mkdir -p build/macos
+          godot --headless --export-release "macOS" build/macos/TobiPet.zip
+          test -f build/macos/TobiPet.zip
+
+      - name: Package
+        run: |
+          command -v zip || (apt-get update && apt-get install -y zip)
+          cp README.md build/windows/
+          (cd build/windows && zip -r ../TobiPet-windows.zip .)
+          cp build/macos/TobiPet.zip build/TobiPet-macos.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TobiPet-windows
+          path: build/TobiPet-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TobiPet-macos
+          path: build/TobiPet-macos.zip
+
+      - name: GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/TobiPet-windows.zip
+            build/TobiPet-macos.zip
+
+      - name: Upload to itch.io
+        if: startsWith(github.ref, 'refs/tags/v') && env.BUTLER_API_KEY != '' && env.ITCH_TARGET != ''
+        run: |
+          butler push build/windows "$ITCH_TARGET:windows" --userversion "$GITHUB_REF_NAME"
+          butler push build/TobiPet-macos.zip "$ITCH_TARGET:mac" --userversion "$GITHUB_REF_NAME"
