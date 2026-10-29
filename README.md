@@ -58,14 +58,9 @@ Windows와 macOS를 지원합니다.
 
 `.github/workflows/build.yml`이 GitHub Actions에서 자동으로 빌드합니다.
 
-- `main` 브랜치에 push하면 Windows와 macOS 빌드가 Actions의 **Artifacts**로 올라갑니다.
-- `v0.1.0`처럼 `v`로 시작하는 태그를 push하면 **GitHub Releases**에 zip 파일이 올라갑니다.
-  ```bash
-  git tag v0.1.0
-  ```
-  ```bash
-  git push origin v0.1.0
-  ```
+- `main` 브랜치에 push하면 Windows와 macOS 빌드를 만들어 **GitHub Releases**에 올립니다.
+  릴리스 이름은 `project.godot`의 `config/version` 값(예: `0.1.0` → `v0.1.0`)을 따르고,
+  같은 버전이면 기존 릴리스의 파일을 새 빌드로 바꿉니다. 새 버전을 내려면 이 값을 올려서 push하세요.
 - itch.io 자동 업로드를 쓰려면 저장소 설정에 다음 두 가지를 추가합니다.
   - Secrets → `BUTLER_API_KEY`: itch.io → Settings → API keys에서 발급
   - Variables → `ITCH_TARGET`: `계정명/게임주소` (예: `odcompany/tobi-pet`)

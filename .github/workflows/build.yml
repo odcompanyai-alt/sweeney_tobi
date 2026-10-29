@@ -22,6 +22,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read version
+        run: echo "VERSION=$(sed -n 's/^config\/version="\(.*\)"/\1/p' project.godot)" >> "$GITHUB_ENV"
+
       - name: Set up export templates
         run: |
           mkdir -v -p ~/.local/share/godot/export_templates/
@@ -60,15 +63,18 @@ jobs:
           path: build/TobiPet-macos.zip
 
       - name: GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.VERSION }}
+          name: Tobi Desktop Pet v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
           files: |
             build/TobiPet-windows.zip
             build/TobiPet-macos.zip
 
       - name: Upload to itch.io
-        if: startsWith(github.ref, 'refs/tags/v') && env.BUTLER_API_KEY != '' && env.ITCH_TARGET != ''
+        if: env.BUTLER_API_KEY != '' && env.ITCH_TARGET != ''
         run: |
-          butler push build/windows "$ITCH_TARGET:windows" --userversion "$GITHUB_REF_NAME"
-          butler push build/TobiPet-macos.zip "$ITCH_TARGET:mac" --userversion "$GITHUB_REF_NAME"
+          butler push build/windows "$ITCH_TARGET:windows" --userversion "$VERSION"
+          butler push build/TobiPet-macos.zip "$ITCH_TARGET:mac" --userversion "$VERSION"
