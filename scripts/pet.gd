@@ -171,6 +171,11 @@ var max_fall_speed := 0.0
 var greet_after_land := true
 var hic_time := -10.0
 
+var together_sec := 0.0       # total time Tobi has been on screen, kept across launches
+var save_timer := 30.0
+var hover_t := 0.0
+var hover_shown := false
+
 var stamp_t := 99.0            # time since the logo was stamped
 var stamp_pos := Vector2.ZERO  # logo centre (anchor space)
 var stamp_rot := 0.0
@@ -225,6 +230,7 @@ func _load_settings() -> void:
 	if cfg.load(SETTINGS_PATH) == OK:
 		size_level = clampi(int(cfg.get_value("pet", "size", 1)), 0, SIZE_LEVELS.size() - 1)
 		stay_still = bool(cfg.get_value("pet", "stay_still", false))
+		together_sec = float(cfg.get_value("pet", "together_sec", 0.0))
 	auto_scale = DisplayServer.screen_get_scale()
 	if OS.get_name() == "Windows":
 		auto_scale = clampf(DisplayServer.screen_get_dpi() / 96.0, 1.0, 3.0)
@@ -235,6 +241,7 @@ func _save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("pet", "size", size_level)
 	cfg.set_value("pet", "stay_still", stay_still)
+	cfg.set_value("pet", "together_sec", together_sec)
 	cfg.save(SETTINGS_PATH)
 
 
@@ -284,6 +291,7 @@ func _on_menu(id: int) -> void:
 			stay_still = not stay_still
 			_save_settings()
 		M_QUIT:
+			_save_settings()
 			get_tree().quit()
 		_:
 			if id >= M_SIZE0:
@@ -320,6 +328,11 @@ func _refresh_screen() -> void:
 func _process(delta: float) -> void:
 	var d := minf(delta, 0.05)
 	t_total += d
+	together_sec += delta
+	save_timer -= delta
+	if save_timer <= 0.0:
+		save_timer = 30.0
+		_save_settings()
 	screen_timer -= d
 	if screen_timer <= 0.0:
 		screen_timer = 0.5
@@ -357,6 +370,7 @@ func _process(delta: float) -> void:
 		bubble_left -= d
 		bubble_t += d
 	rub = maxf(0.0, rub - 300.0 * d)
+	_update_hover(d)
 
 	_apply_window()
 	_update_passthrough()
@@ -1253,6 +1267,22 @@ func _input(event: InputEvent) -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT and dragging:
 		_end_drag()
+	elif what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_PREDELETE:
+		_save_settings()
+
+
+## Resting the mouse on Tobi tells how long you have been together.
+## It shows once per hover; move away and come back to see it again.
+func _update_hover(d: float) -> void:
+	var local := Vector2(DisplayServer.mouse_get_position() - get_window().position)
+	if pressing or dragging or state in ["drag", "fall"] or not _hit_char(local):
+		hover_t = 0.0
+		hover_shown = false
+		return
+	hover_t += d
+	if hover_t > 0.35 and not hover_shown and bubble_left <= 0.0:
+		hover_shown = true
+		_say("토비와 함께한 지 %d시간 째!" % int(together_sec / 3600.0), 2.5)
 
 
 func _poll_mouse(d: float) -> void:
