@@ -13,4 +13,6 @@ const PIVOTS := {
 	"arm": Vector2(24.0, 14.0),
 	"foot": Vector2(30.0, 34.0),
 	"box": Vector2(82.0, 90.0),
+	"whiskey": Vector2(22.0, 60.0),
+	"pie": Vector2(60.0, 42.0),
 }

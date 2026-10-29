@@ -51,9 +51,10 @@ const FACES := {
 	"sleep": ["closed", "o_small", "soft"],
 	"yawn": ["closed", "talk", "raised"],
 	"pout": ["open", "pout", "angry"],
+	"drunk": ["closed", "open_smile", "worried"],
 }
 
-enum { M_BOX, M_WIG, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_QUIT, M_SIZE0 = 100 }
+enum { M_BOX, M_WIG, M_DRINK, M_PIE, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_QUIT, M_SIZE0 = 100 }
 
 
 class Pose:
@@ -76,7 +77,13 @@ class Pose:
 	var blush := 0.3
 	var mouth_open := 0.0
 	var nose_bubble := 0.0
+	var nose_red := 0.0
 	var dizzy := false
+	var prop := ""                 # held sprite: "whiskey" / "pie"
+	var prop_hand := "r"           # "r" or "both"
+	var prop_rot := 0.0
+	var prop_off := Vector2.ZERO
+	var prop_scale := 1.0
 
 
 class Particle:
@@ -158,6 +165,7 @@ var rub := 0.0
 var last_rub := -10.0
 var max_fall_speed := 0.0
 var greet_after_land := true
+var hic_time := -10.0
 
 var last_region := Rect2i()
 var region_full := false
@@ -221,6 +229,8 @@ func _build_menu() -> void:
 	menu = PopupMenu.new()
 	menu.add_item("박스 위에서 외치기", M_BOX)
 	menu.add_item("가발 벗기", M_WIG)
+	menu.add_item("위스키 마시기", M_DRINK)
+	menu.add_item("파이 서빙하기", M_PIE)
 	menu.add_item("손 흔들기", M_WAVE)
 	menu.add_item("깡총 뛰기", M_HOP)
 	menu.add_item("낮잠 자기", M_SLEEP)
@@ -250,6 +260,8 @@ func _on_menu(id: int) -> void:
 	match id:
 		M_BOX: _start_action("box")
 		M_WIG: _start_action("wig")
+		M_DRINK: _start_action("drink")
+		M_PIE: _start_action("pie")
 		M_WAVE: _start_action("wave")
 		M_HOP: _start_action("hop")
 		M_SLEEP: _start_action("sleep")
@@ -309,6 +321,8 @@ func _process(delta: float) -> void:
 		"hop": _st_hop(d)
 		"box": _st_box(d)
 		"wig": _st_wig(d)
+		"drink": _st_drink(d)
+		"pie": _st_pie(d)
 		"sleep": _st_sleep(d)
 		"wake": _st_wake(d)
 		"poke": _st_poke(d)
@@ -382,6 +396,8 @@ func _pick_next() -> void:
 		"wave": 8.0,
 		"box": 12.0,
 		"wig": 10.0,
+		"drink": 7.0,
+		"pie": 8.0,
 		"hop": 9.0,
 		"sleep": 6.0,
 	}
@@ -785,6 +801,143 @@ func _wig_physics(d: float) -> void:
 			wig_rot = lerp_angle(wig_rot, 0.0, 1.0 - exp(-10.0 * d))
 
 
+## A swig of whiskey, a happy hiccup, and a lot of love for everyone.
+func _st_drink(d: float) -> void:
+	_breathe()
+	pose.arms_front = true
+	pose.prop = "whiskey"
+	var tipsy := _smooth((st - 1.5) / 0.9)
+	pose.blush = 0.3 + 0.7 * tipsy
+	pose.nose_red = tipsy
+	if st < 0.45:
+		pose.prop_scale = _ease_out_back(st / 0.45)
+		pose.arm_r = -40.0
+		pose.face = "hehe"
+		pose.look = Vector2(0.8, 0.3)
+		if _once("pop"):
+			_spawn_spark(_anchor_of(Vector2(34, -50)))
+	elif st < 1.7:
+		var a := _smooth((st - 0.45) / 0.3)
+		pose.arm_r = lerpf(-40.0, -165.0, a)
+		pose.prop_rot = lerpf(0.0, -1.45, a)
+		pose.head_rot = 0.12 * a
+		pose.face = "sleep"
+		var gulp := absf(sin((st - 0.75) * 7.5))
+		pose.squash = Vector2(1.0 - gulp * 0.015, 1.0 + gulp * 0.02)
+		if st > 0.8 and _once("gulp1"):
+			_spawn_text(_anchor_of(Vector2(-32, -128)), "꿀꺽", 12.0, COL_TEXT)
+		if st > 1.25 and _once("gulp2"):
+			_spawn_text(_anchor_of(Vector2(-36, -138)), "꿀꺽", 12.0, COL_TEXT)
+	elif st < 2.4:
+		var a := _smooth((st - 1.7) / 0.3)
+		pose.arm_r = lerpf(-165.0, -60.0, a)
+		pose.prop_rot = lerpf(-1.45, 0.3, a)
+		pose.face = "happy"
+		if _once("kya"):
+			_say("캬~!", 0.7)
+		if st > 2.1 and _once("hic1"):
+			_hiccup()
+	elif st < 5.6:
+		var t := st - 2.4
+		pose.face = "drunk"
+		pose.root_rot = sin(t * 2.4) * 0.14
+		pose.root.x = sin(t * 1.2) * 6.0
+		pose.head_rot = sin(t * 2.4 + 0.8) * 0.12
+		pose.foot_l.y = -maxf(0.0, sin(t * 4.8)) * 3.0
+		pose.foot_r.y = -maxf(0.0, -sin(t * 4.8)) * 3.0
+		pose.arm_r = -110.0 + sin(t * 4.0) * 25.0
+		pose.prop_rot = 0.3 + sin(t * 4.0) * 0.3
+		pose.arm_l = 70.0 + sin(t * 2.4) * 20.0
+		pose.scarf_rot = sin(t * 2.4) * 0.25
+		if t > 0.2 and t < 2.8:
+			_say("정말 좋은 분이세요!", 0.3)
+		if t > 2.0 and _once("hic2"):
+			_hiccup()
+		if fmod(t, 0.9) < d:
+			_spawn_heart(_anchor_of(Vector2(randf_range(-30, 30), -140)))
+	elif st < 6.2:
+		var g := _smooth((st - 5.6) / 0.6)
+		pose.prop_scale = 1.0 - g
+		pose.arm_r = lerpf(-60.0, -12.0, g)
+		pose.face = "hehe"
+		if _once("poof"):
+			_dust_burst(_anchor_of(Vector2(30, -60)), 3)
+	else:
+		_enter("idle")
+		return
+	var hk := t_total - hic_time
+	if hk < 0.25:
+		pose.root.y -= sin(hk / 0.25 * PI) * 5.0
+
+
+func _hiccup() -> void:
+	hic_time = t_total
+	_spawn_text(_anchor_of(Vector2(30, -152)), "힉!", 14.0, COL_HEART)
+
+
+## Proudly marches in with a fresh Lovett pie and serves it with a bow.
+func _st_pie(d: float) -> void:
+	var hold := -35.0
+	pose.arms_front = true
+	pose.prop = "pie"
+	pose.prop_hand = "both"
+	pose.prop_off = Vector2(0, -2)
+	pose.face = "hehe"
+	pose.blush = 0.5
+	pose.arm_l = hold
+	if st < 0.35:
+		pose.arm_l = lerpf(12.0, hold, _smooth(st / 0.2))
+		pose.prop_scale = _ease_out_back(st / 0.35)
+		if _once("ta"):
+			_spawn_text(_anchor_of(Vector2(0, -152)), "짠!", 16.0, COL_LINE)
+			_spawn_spark(_anchor_of(Vector2(-26, -50)))
+			_spawn_spark(_anchor_of(Vector2(26, -50)))
+	elif st < 1.9:
+		# neat little marching steps, pie held perfectly level
+		var stp := sin((st - 0.35) * 11.0)
+		pose.foot_l.y = -maxf(0.0, stp) * 4.0
+		pose.foot_r.y = -maxf(0.0, -stp) * 4.0
+		pose.root.y = -absf(stp) * 1.5
+		pose.root_rot = stp * 0.03
+		pose.prop_rot = -stp * 0.03
+		pose.head_rot = stp * 0.03
+		pose.scarf_rot = stp * 0.1
+	elif st < 3.5:
+		var a := _smooth((st - 1.9) / 0.35)
+		pose.arm_l = lerpf(hold, -75.0, a)
+		pose.prop_off = Vector2(0, -2.0 - 3.0 * a)
+		pose.head_off.y = 3.0 * a
+		pose.squash = Vector2(1.0 + 0.03 * a, 1.0 - 0.04 * a)
+		pose.face = "happy"
+		if st > 2.0 and st < 3.4:
+			_say("주문하신 파이 나왔습니다!", 0.3)
+	elif st < 4.7:
+		var t := st - 3.5
+		pose.arm_l = -75.0
+		pose.prop_off = Vector2(0, -5)
+		pose.head_rot = 0.12 * _smooth(t / 0.3)
+		pose.blush = 0.8
+		if st < 4.6:
+			_say("맛있게 드세요~!", 0.3)
+		if _once("hearts"):
+			_spawn_heart(_anchor_of(Vector2(-28, -130)))
+			_spawn_heart(_anchor_of(Vector2(28, -140)))
+	elif st < 5.2:
+		var g := _smooth((st - 4.7) / 0.5)
+		pose.prop_off = Vector2(0, -5)
+		pose.prop_scale = 1.0 - g
+		pose.arm_l = lerpf(-75.0, 12.0, g)
+		if _once("poof"):
+			for i in 3:
+				_spawn_spark(_anchor_of(Vector2(randf_range(-25, 25), randf_range(-70, -40))))
+	else:
+		_enter("idle")
+		return
+	pose.arm_r = -pose.arm_l
+	if st > 0.35 and st < 4.7 and fmod(st, 0.35) < d:
+		_spawn("steam", _anchor_of(Vector2(randf_range(-10, 10), -50 + pose.prop_off.y)), Vector2(0, -16), 1.2)
+
+
 func _st_sleep(d: float) -> void:
 	var a := _smooth(st / 0.8)
 	var br := sin(st * 1.7)
@@ -1061,7 +1214,7 @@ func _on_click() -> void:
 			if st > 1.25 and st < stomp_end:
 				box_line = (box_line + 1 + randi() % (BOX_LINES.size() - 1)) % BOX_LINES.size()
 				stomp_end = maxf(stomp_end, st + 2.5)
-		"wig", "fall", "drag", "land", "dizzy":
+		"wig", "drink", "pie", "fall", "drag", "land", "dizzy":
 			_spawn_heart(_anchor_of(Vector2(randf_range(-20, 20), -140)))
 		_:
 			poke_times.append(t_total)
@@ -1277,9 +1430,14 @@ func _draw_char() -> void:
 	if wig_attached:
 		_part("wig", ht * Transform2D(wig_rot, Vector2(0, -70) + wig_off) * Transform2D(0.0, Vector2(0, 70)))
 	_part("scarf_wrap", bt * Transform2D(0.0, Vector2(0, -42)))
+	# a one-hand prop sits under the gripping hand; a two-hand prop rests on top of both hands
+	if p.prop_hand != "both":
+		_draw_prop(p, bt)
 	if p.arms_front:
 		_part("arm", al)
 		_part("arm", ar, true)
+	if p.prop_hand == "both":
+		_draw_prop(p, bt)
 	if not wig_attached:
 		_part("wig", ct * Transform2D(wig_rot, wig_c) * Transform2D(0.0, Vector2(0, 70)))
 	if p.dizzy:
@@ -1287,6 +1445,16 @@ func _draw_char() -> void:
 		for i in 3:
 			var a := st * 4.0 + TAU * i / 3.0
 			_star(Vector2(cos(a) * 34.0, -92.0 + sin(a) * 9.0), 4.5, COL_SPARK)
+
+
+func _draw_prop(p: Pose, bt: Transform2D) -> void:
+	if p.prop == "" or p.prop_scale <= 0.02:
+		return
+	var hand := Vector2(0, 20)
+	var at := Vector2(23, -38) + hand.rotated(deg_to_rad(p.arm_r))
+	if p.prop_hand == "both":
+		at = (at + Vector2(-23, -38) + hand.rotated(deg_to_rad(p.arm_l))) * 0.5
+	_part(p.prop, bt * Transform2D(p.prop_rot, at + p.prop_off) * Transform2D(0.0, Vector2(p.prop_scale, p.prop_scale), 0.0, Vector2.ZERO))
 
 
 func _draw_bald() -> void:
@@ -1361,7 +1529,7 @@ func _draw_face(p: Pose) -> void:
 			"worried":
 				_line(Vector2(20.0 * sx, -41.5) + o, Vector2(10.0 * sx, -45.5) + o, COL_LINE, 1.8)
 
-	_ell(Vector2(0, -26.5) + o, 1.5, 1.3, COL_NOSE)
+	_ell(Vector2(0, -26.5) + o, 1.5 + p.nose_red * 1.2, 1.3 + p.nose_red * 1.0, COL_NOSE.lerp(Color("#ff5a6a"), p.nose_red))
 
 	var m := Vector2(0, -24) + o
 	match mouth:
@@ -1422,6 +1590,12 @@ func _draw_particles() -> void:
 				_note(p.pos + Vector2(sin(age * 5.0) * 3.0, 0), Color(p.color, a))
 			"sweat":
 				_drop(p.pos, 3.0, Color(COL_SWEAT, a))
+			"steam":
+				var g := age / p.max_life
+				var sp := PackedVector2Array()
+				for k in 5:
+					sp.append(p.pos + Vector2(sin(k * 1.4 + age * 6.0) * 1.8, -k * 2.5))
+				_polyline(sp, Color(1, 1, 1, 0.75 * (1.0 - g) * minf(age / 0.2, 1.0)), 1.6)
 			"anger":
 				_anger(p.pos, 1.0 + 0.15 * sin(age * 14.0), Color(COL_ANGER, a))
 	for p: Particle in particles:
