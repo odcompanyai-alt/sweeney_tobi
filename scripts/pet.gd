@@ -1282,7 +1282,11 @@ func _update_hover(d: float) -> void:
 	hover_t += d
 	if hover_t > 0.35 and not hover_shown and bubble_left <= 0.0:
 		hover_shown = true
-		_say("토비와 함께한 지 %d시간 째!" % int(together_sec / 3600.0), 2.5)
+		var hours := int(together_sec / 3600.0)
+		var span := "%d시간" % hours
+		if hours >= 24:
+			span = "%d일 %d시간" % [hours / 24, hours % 24]
+		_say("토비와 함께한 지 %s 째!" % span, 2.5)
 
 
 func _poll_mouse(d: float) -> void:
