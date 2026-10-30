@@ -70,7 +70,7 @@ const FACES := {
 	"sad": ["teary", "frown", "worried"],
 }
 
-enum { M_TODO, M_MEMO, M_STOPWATCH, M_CALC, M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_QUIT, M_SIZE0 = 100 }
+enum { M_TODO, M_MEMO, M_STOPWATCH, M_CALC, M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_WALK_ONLY, M_QUIT, M_SIZE0 = 100 }
 
 
 class Pose:
@@ -126,6 +126,7 @@ var size_level := 1
 var auto_scale := 1.0
 var pet_scale := 1.0
 var stay_still := false
+var walk_only := false          # no surprise actions: just strolling (and resting)
 var view_xf := Transform2D.IDENTITY
 
 var pos := Vector2.ZERO        # anchor (feet on the ground) in screen pixels
@@ -266,6 +267,7 @@ func _load_settings() -> void:
 	if cfg.load(SETTINGS_PATH) == OK:
 		size_level = clampi(int(cfg.get_value("pet", "size", 1)), 0, SIZE_LEVELS.size() - 1)
 		stay_still = bool(cfg.get_value("pet", "stay_still", false))
+		walk_only = bool(cfg.get_value("pet", "walk_only", false))
 		together_sec = float(cfg.get_value("pet", "together_sec", 0.0))
 	auto_scale = DisplayServer.screen_get_scale()
 	if OS.get_name() == "Windows":
@@ -277,6 +279,7 @@ func _save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("pet", "size", size_level)
 	cfg.set_value("pet", "stay_still", stay_still)
+	cfg.set_value("pet", "walk_only", walk_only)
 	cfg.set_value("pet", "together_sec", together_sec)
 	cfg.save(SETTINGS_PATH)
 
@@ -300,6 +303,7 @@ func _build_menu() -> void:
 	for i in SIZE_LEVELS.size():
 		menu.add_radio_check_item("크기: " + SIZE_NAMES[i], M_SIZE0 + i)
 	menu.add_check_item("제자리에 있기 (걷지 않기)", M_STILL)
+	menu.add_check_item("산책만 하기 (돌발 모션 끄기)", M_WALK_ONLY)
 	menu.add_separator()
 	menu.add_item("종료", M_QUIT)
 	menu.id_pressed.connect(_on_menu)
@@ -310,6 +314,7 @@ func _sync_menu() -> void:
 	for i in SIZE_LEVELS.size():
 		menu.set_item_checked(menu.get_item_index(M_SIZE0 + i), i == size_level)
 	menu.set_item_checked(menu.get_item_index(M_STILL), stay_still)
+	menu.set_item_checked(menu.get_item_index(M_WALK_ONLY), walk_only)
 	menu.set_item_checked(menu.get_item_index(M_TODO), widgets.is_open("todo"))
 	menu.set_item_checked(menu.get_item_index(M_MEMO), widgets.is_open("memo"))
 	menu.set_item_checked(menu.get_item_index(M_STOPWATCH), widgets.is_open("stopwatch"))
@@ -339,6 +344,12 @@ func _on_menu(id: int) -> void:
 		M_STILL:
 			stay_still = not stay_still
 			_save_settings()
+		M_WALK_ONLY:
+			walk_only = not walk_only
+			_save_settings()
+			if walk_only and state in CALM:
+				_cleanup_specials()
+				_enter("idle")
 		M_QUIT:
 			_save_settings()
 			widgets.save()
@@ -499,6 +510,9 @@ func _pick_next() -> void:
 			return
 		if _arrive_widget():
 			return
+	if walk_only:
+		_enter("idle" if stay_still or not is_nan(tx) else "walk")
+		return
 	var opts := {
 		"walk": 0.0 if stay_still else 36.0,
 		"look": 10.0,
@@ -604,12 +618,12 @@ func _st_walk(d: float) -> void:
 
 	if fmod(st, 1.6) < d and randf() < 0.5:
 		_spawn_note()
-	if st > 1.0 and randf() < d * 0.06:
+	if not walk_only and st > 1.0 and randf() < d * 0.06:
 		_enter("stamp")
 		return
 
 	# every now and then, out of nowhere: "우와~~~"
-	if bubble_left <= 0.0 and st > 0.8 and randf() < d * 0.15:
+	if not walk_only and bubble_left <= 0.0 and st > 0.8 and randf() < d * 0.15:
 		_say(WALK_SHOUT, 1.6)
 		_spawn_spark(_anchor_of(Vector2(randf_range(-30, 30), -150)))
 	if bubble_text == WALK_SHOUT and bubble_left > 0.0:
@@ -1778,7 +1792,7 @@ func _input(event: InputEvent) -> void:
 					return
 				if mb.double_click:
 					pressing = false
-					if state in PETTABLE or state in ["poke", "pout"]:
+					if not walk_only and (state in PETTABLE or state in ["poke", "pout"]):
 						_start_action("hop")
 					return
 				pressing = true
@@ -1875,6 +1889,9 @@ func _end_drag() -> void:
 
 
 func _on_click() -> void:
+	if walk_only and state in CALM:
+		_spawn_heart(_anchor_of(Vector2(randf_range(-20, 20), -140)))
+		return
 	match state:
 		"sleep":
 			_say("앗, 깜짝이야!", 1.2)
