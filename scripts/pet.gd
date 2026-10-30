@@ -67,6 +67,7 @@ const FACES := {
 	"yawn": ["closed", "talk", "raised"],
 	"pout": ["open", "pout", "angry"],
 	"drunk": ["closed", "open_smile", "worried"],
+	"sad": ["teary", "frown", "worried"],
 }
 
 enum { M_TODO, M_MEMO, M_STOPWATCH, M_CALC, M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_QUIT, M_SIZE0 = 100 }
@@ -195,6 +196,8 @@ var press_time := 0.0
 var launcher_t := 99.0          # time since the long-press launcher opened
 var launcher_off := Vector2.ZERO
 var sw_last_min := 0
+var sulk_t := -100.0            # last time Tobi asked about a widget out of reach
+var sulk_key := Vector2i(-99999, -99999)
 var calc_key_t := -10.0
 var calc_keys := 0
 var calc_value := 0.0
@@ -408,6 +411,7 @@ func _process(delta: float) -> void:
 		"record": _st_record(d)
 		"count": _st_count(d)
 		"coins": _st_coins(d)
+		"sulk": _st_sulk(d)
 		"sleep": _st_sleep(d)
 		"wake": _st_wake(d)
 		"poke": _st_poke(d)
@@ -485,6 +489,9 @@ func _once(key: String) -> bool:
 
 
 func _pick_next() -> void:
+	if _active_widget() != null and _widget_too_high() and _should_sulk():
+		_enter("sulk")
+		return
 	var tx := _widget_target_x()
 	if not is_nan(tx):
 		if absf(tx - pos.x) > 6.0 * pet_scale:
@@ -1157,10 +1164,11 @@ func _arrive_widget() -> bool:
 	return false
 
 
-## Screen x where Tobi should stand next to the active widget (NAN if none).
+## Screen x where Tobi should stand next to the active widget
+## (NAN if there is none, or it floats too high to keep him company).
 func _widget_target_x() -> float:
 	var w := _active_widget()
-	if w == null:
+	if w == null or _widget_too_high():
 		return NAN
 	var px := pet_scale
 	var lo := usable.position.x + 60.0 * px
@@ -1171,6 +1179,33 @@ func _widget_target_x() -> float:
 	if tx < lo or tx > hi:
 		tx = right if tx == left else left
 	return clampf(tx, lo, hi)
+
+
+## The widget's bottom edge is more than about twice Tobi's height above the ground.
+func _widget_too_high() -> bool:
+	var w := _active_widget()
+	return w != null and float(w.position.y + w.size.y) < pos.y - 300.0 * pet_scale
+
+
+## Asks only once per window position, and at most every 45 seconds.
+func _should_sulk() -> bool:
+	var key := _active_widget().position
+	if key == sulk_key and t_total - sulk_t < 45.0:
+		return false
+	if t_total - sulk_t < 8.0:
+		return false
+	sulk_key = key
+	sulk_t = t_total
+	return true
+
+
+## Call at the top of companion states: leaves (or sulks) when the widget
+## is gone, minimized or out of reach. Returns true if the state changed.
+func _lost_widget() -> bool:
+	if not is_nan(_widget_target_x()):
+		return false
+	_enter("sulk" if _active_widget() != null and _widget_too_high() and _should_sulk() else "idle")
+	return true
 
 
 ## Turns Tobi toward the active widget; returns how much he has to look up.
@@ -1208,10 +1243,9 @@ func _on_memo_typed() -> void:
 
 
 func _st_goto(d: float) -> void:
-	var tx := _widget_target_x()
-	if is_nan(tx):
-		_enter("idle")
+	if _lost_widget():
 		return
+	var tx := _widget_target_x()
 	var dx := tx - pos.x
 	if absf(dx) < 3.0:
 		pos.x = tx
@@ -1228,6 +1262,8 @@ func _st_goto(d: float) -> void:
 func _st_sit(d: float) -> void:
 	if _active_kind() != "memo":
 		_enter("idle")
+		return
+	if _lost_widget():
 		return
 	var tx := _widget_target_x()
 	if absf(tx - pos.x) > 40.0 * pet_scale:
@@ -1263,6 +1299,8 @@ func _st_sit(d: float) -> void:
 func _st_watch(d: float) -> void:
 	if _active_kind() != "memo":
 		_enter("idle")
+		return
+	if _lost_widget():
 		return
 	if t_total - memo_type_t > 2.5:
 		_enter("sit")
@@ -1380,6 +1418,8 @@ func _st_timekeep(d: float) -> void:
 	if _active_kind() != "stopwatch" or not widgets.sw_running:
 		_enter("idle")
 		return
+	if _lost_widget():
+		return
 	if absf(_widget_target_x() - pos.x) > 40.0 * pet_scale:
 		_enter("goto")
 		return
@@ -1431,6 +1471,8 @@ func _st_count(d: float) -> void:
 	if _active_kind() != "calc" or t_total - calc_key_t > 2.5:
 		_enter("idle")
 		return
+	if _lost_widget():
+		return
 	if absf(_widget_target_x() - pos.x) > 40.0 * pet_scale:
 		_enter("goto")
 		return
@@ -1472,6 +1514,29 @@ func _st_coins(_d: float) -> void:
 	if st < 0.5:
 		pose.root.y = -sin(st / 0.5 * PI) * 12.0
 	if st > 2.0:
+		_enter("idle")
+
+
+## The widget floats way up high: "Am I not allowed to look?"
+func _st_sulk(_d: float) -> void:
+	if _active_widget() != null:
+		_face_widget()
+	var a := _smooth(st / 0.4)
+	pose.face = "sad"
+	pose.blush = 0.6
+	pose.look = Vector2(0.5, -1.0)
+	pose.head_rot = 0.1 * a + sin(st * 1.3) * 0.02
+	pose.squash = Vector2(1.0 + 0.02 * a, 1.0 - 0.03 * a)
+	# fidgeting hands in front, toe scuffing the floor
+	pose.arms_front = true
+	pose.arm_l = lerpf(12.0, -28.0, a) + sin(st * 5.0) * 4.0
+	pose.arm_r = lerpf(-12.0, 28.0, a) - sin(st * 5.0 + 1.0) * 4.0
+	pose.foot_r = Vector2(sin(st * 3.0) * 2.5 * a, -absf(sin(st * 3.0)) * 1.5 * a)
+	if st > 0.3 and _once("ask"):
+		_say("제가 보면 안되는 거예요?", 2.6)
+	if st > 3.0 and _once("sigh"):
+		_spawn_text(_anchor_of(Vector2(30, -150)), "…", 14.0, COL_TEXT)
+	if st > 3.6:
 		_enter("idle")
 
 
@@ -2231,6 +2296,8 @@ func _draw_face(p: Pose) -> void:
 			_polyline(wp, COL_LINE, 1.5)
 		"flat":
 			_line(m + Vector2(-4, 1), m + Vector2(4, 1), COL_LINE, 1.6)
+		"frown":
+			_arc(m + Vector2(0, 4.5), 4.5, 1.2 * PI, 1.8 * PI, COL_LINE, 1.6)
 		"pout":
 			_polyline(PackedVector2Array([m + Vector2(-3, 2.5), m + Vector2(0, 0), m + Vector2(3, 2.5)]), COL_LINE, 1.6)
 

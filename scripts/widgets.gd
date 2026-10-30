@@ -71,14 +71,17 @@ func window_of(kind: String) -> Window:
 	return windows.get(kind) as Window
 
 
+## Open and on screen (a minimized widget counts as closed).
 func is_open(kind: String) -> bool:
 	var w := window_of(kind)
-	return w != null and w.visible
+	return w != null and w.visible and w.mode != Window.MODE_MINIMIZED
 
 
 ## Shows the widget next to the given screen point (Tobi's feet).
 func open(kind: String, near: Vector2, usable: Rect2i) -> void:
 	var w := window_of(kind)
+	if w.mode == Window.MODE_MINIMIZED:
+		w.mode = Window.MODE_WINDOWED
 	if not w.visible:
 		var gap := 70.0 * ui_scale
 		var x := near.x + gap
