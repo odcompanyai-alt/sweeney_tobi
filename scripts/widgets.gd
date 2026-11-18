@@ -10,11 +10,12 @@ signal stopwatch_reset
 signal calc_key
 signal calc_result(value: float, error: bool)
 signal focused(kind: String)
+signal closed(kind: String)
 
 const SAVE_PATH := "user://widgets.cfg"
-const KINDS := ["todo", "memo", "stopwatch", "calc"]
-const TITLES := {"todo": "토비의 할 일", "memo": "토비의 메모", "stopwatch": "토비의 스톱워치", "calc": "토비의 계산기"}
-const SIZES := {"todo": Vector2i(270, 340), "memo": Vector2i(300, 340), "stopwatch": Vector2i(270, 210), "calc": Vector2i(260, 360)}
+const KINDS := ["todo", "memo", "stopwatch", "calc", "lines"]
+const TITLES := {"todo": "토비의 할 일", "memo": "토비의 메모", "stopwatch": "토비의 스톱워치", "calc": "토비의 계산기", "lines": "토비에게 대사 가르치기"}
+const SIZES := {"todo": Vector2i(270, 340), "memo": Vector2i(300, 340), "stopwatch": Vector2i(270, 210), "calc": Vector2i(260, 360), "lines": Vector2i(300, 330)}
 const CALC_KEYS := ["C", "±", "%", "÷", "7", "8", "9", "×", "4", "5", "6", "-", "1", "2", "3", "+", "0", ".", "←", "="]
 const COL_INK := Color("#4a3228")
 const COL_SOFT := Color("#9a8670")
@@ -28,6 +29,8 @@ var todo_list: VBoxContainer
 var memo_edit: TextEdit
 var todo_items: Array = []
 var memo_text := ""
+var lines_edit: TextEdit
+var lines_text := ""
 var memo_dirty := false
 var memo_save_timer := 0.0
 
@@ -55,6 +58,7 @@ func setup(scale_factor: float) -> void:
 	_build_memo()
 	_build_stopwatch()
 	_build_calc()
+	_build_lines()
 
 
 func _process(delta: float) -> void:
@@ -102,6 +106,7 @@ func open(kind: String, near: Vector2, usable: Rect2i) -> void:
 func close(kind: String) -> void:
 	window_of(kind).hide()
 	save()
+	closed.emit(kind)
 
 
 func toggle(kind: String, near: Vector2, usable: Rect2i) -> void:
@@ -116,6 +121,7 @@ func save() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("todo", "items", todo_items)
 	cfg.set_value("memo", "text", memo_edit.text if memo_edit else memo_text)
+	cfg.set_value("lines", "text", lines_edit.text if lines_edit else lines_text)
 	cfg.save(SAVE_PATH)
 
 
@@ -124,6 +130,7 @@ func _load() -> void:
 	if cfg.load(SAVE_PATH) == OK:
 		todo_items = cfg.get_value("todo", "items", [])
 		memo_text = str(cfg.get_value("memo", "text", ""))
+		lines_text = str(cfg.get_value("lines", "text", ""))
 
 
 func format_time(t: float) -> String:
@@ -286,6 +293,37 @@ func _on_memo_changed() -> void:
 	memo_dirty = true
 	memo_save_timer = 1.0
 	memo_typed.emit()
+
+
+# --- Custom lines -----------------------------------------------------
+
+func _build_lines() -> void:
+	var v := _content("lines")
+	lines_edit = TextEdit.new()
+	lines_edit.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	lines_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	lines_edit.placeholder_text = "한 줄에 대사 하나씩 적어 주세요\n\n예) 오늘도 화이팅!\n예) 물 한 잔 마셔요~"
+	lines_edit.text = lines_text
+	lines_edit.text_changed.connect(_on_lines_changed)
+	v.add_child(lines_edit)
+	_hint(v, "토비가 돌아다니다가 가끔 이 중 하나를 말해요. 자동 저장돼요.")
+
+
+func _on_lines_changed() -> void:
+	memo_dirty = true
+	memo_save_timer = 1.0
+
+
+## The lines the user taught Tobi (blank rows skipped).
+func custom_lines() -> PackedStringArray:
+	var out := PackedStringArray()
+	if lines_edit == null:
+		return out
+	for line in lines_edit.text.split("\n"):
+		var t := line.strip_edges()
+		if not t.is_empty():
+			out.append(t)
+	return out
 
 
 # --- Stopwatch --------------------------------------------------------

@@ -6,6 +6,7 @@ extends Node2D
 
 const PartData := preload("res://scripts/part_data.gd")
 const Widgets := preload("res://scripts/widgets.gd")
+const Autostart := preload("res://scripts/autostart.gd")
 
 const BASE_SIZE := Vector2(380, 340)   # window size at scale 1 (units)
 const FEET := Vector2(190, 334)        # where the feet touch the ground inside the window
@@ -26,7 +27,7 @@ const WALK_SHOUT := "우와~~~"
 const CALM := ["idle", "walk", "look", "wave", "hop", "petted", "poke", "pout", "sit", "watch", "goto", "offer", "timekeep", "count"]
 const WIDGET_KINDS := ["memo", "todo", "stopwatch", "calc"]
 const WIDGET_LABELS := ["할 일", "메모", "스톱워치", "계산기"]
-const WIDGET_GREETINGS := {"todo": "할 일 같이 해요!", "memo": "뭐 적을 거예요?", "stopwatch": "시간 재 볼까요?", "calc": "계산은 저한테 맡기세요!"}
+const WIDGET_GREETINGS := {"todo": "할 일 같이 해요!", "memo": "뭐 적을 거예요?", "stopwatch": "시간 재 볼까요?", "calc": "계산은 저한테 맡기세요!", "lines": "어떤 말을 가르쳐 줄 거예요?"}
 const TICK_LINES := ["째깍째깍…", "시간은 금이에요!", "파이 굽는 시간 재는 중!", "똑딱똑딱~"]
 const COUNT_LINES := ["음…", "하나, 둘…", "흠흠", "?"]
 const COIN_LINES := ["계산 끝!", "정확해요!", "러빗 부인께 보고할게요!"]
@@ -70,7 +71,7 @@ const FACES := {
 	"sad": ["teary", "frown", "worried"],
 }
 
-enum { M_TODO, M_MEMO, M_STOPWATCH, M_CALC, M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_WALK_ONLY, M_QUIT, M_SIZE0 = 100 }
+enum { M_TODO, M_MEMO, M_STOPWATCH, M_CALC, M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_WALK_ONLY, M_LINES, M_AUTOSTART, M_QUIT, M_SIZE0 = 100 }
 
 
 class Pose:
@@ -126,6 +127,8 @@ var size_level := 1
 var auto_scale := 1.0
 var pet_scale := 1.0
 var stay_still := false
+var autostart_on := false
+var line_timer := 40.0          # next time Tobi says one of the user's own lines
 var walk_only := false          # no surprise actions: just strolling (and resting)
 var view_xf := Transform2D.IDENTITY
 
@@ -240,7 +243,12 @@ func _ready() -> void:
 	widgets.stopwatch_reset.connect(_on_stopwatch_reset)
 	widgets.calc_key.connect(_on_calc_key)
 	widgets.calc_result.connect(_on_calc_result)
-	widgets.focused.connect(func(kind: String) -> void: widget_focus = kind)
+	widgets.focused.connect(_on_widget_focused)
+	widgets.closed.connect(_on_widget_closed)
+	if Autostart.supported():
+		autostart_on = Autostart.is_enabled()
+		if autostart_on:
+			Autostart.set_enabled(true)   # keep the path current if the app was moved
 	_refresh_screen()
 	_apply_scale()
 	last_mouse = Vector2(DisplayServer.mouse_get_position())
@@ -304,6 +312,9 @@ func _build_menu() -> void:
 		menu.add_radio_check_item("크기: " + SIZE_NAMES[i], M_SIZE0 + i)
 	menu.add_check_item("제자리에 있기 (걷지 않기)", M_STILL)
 	menu.add_check_item("산책만 하기 (돌발 모션 끄기)", M_WALK_ONLY)
+	menu.add_item("대사 가르치기…", M_LINES)
+	if Autostart.supported():
+		menu.add_check_item("컴퓨터 켤 때 자동 실행", M_AUTOSTART)
 	menu.add_separator()
 	menu.add_item("종료", M_QUIT)
 	menu.id_pressed.connect(_on_menu)
@@ -315,6 +326,8 @@ func _sync_menu() -> void:
 		menu.set_item_checked(menu.get_item_index(M_SIZE0 + i), i == size_level)
 	menu.set_item_checked(menu.get_item_index(M_STILL), stay_still)
 	menu.set_item_checked(menu.get_item_index(M_WALK_ONLY), walk_only)
+	if Autostart.supported():
+		menu.set_item_checked(menu.get_item_index(M_AUTOSTART), autostart_on)
 	menu.set_item_checked(menu.get_item_index(M_TODO), widgets.is_open("todo"))
 	menu.set_item_checked(menu.get_item_index(M_MEMO), widgets.is_open("memo"))
 	menu.set_item_checked(menu.get_item_index(M_STOPWATCH), widgets.is_open("stopwatch"))
@@ -344,6 +357,15 @@ func _on_menu(id: int) -> void:
 		M_STILL:
 			stay_still = not stay_still
 			_save_settings()
+		M_LINES:
+			_toggle_widget("lines")
+		M_AUTOSTART:
+			var err := Autostart.set_enabled(not autostart_on)
+			if err.is_empty():
+				autostart_on = not autostart_on
+				_say("컴퓨터 켜면 저도 같이 나올게요!" if autostart_on else "자동 실행을 껐어요", 2.2)
+			else:
+				_say(err, 2.6)
 		M_WALK_ONLY:
 			walk_only = not walk_only
 			_save_settings()
@@ -443,6 +465,7 @@ func _process(delta: float) -> void:
 		bubble_t += d
 	rub = maxf(0.0, rub - 300.0 * d)
 	_update_hover(d)
+	_update_custom_lines(d)
 
 	_apply_window()
 	_update_passthrough()
@@ -1236,7 +1259,7 @@ func _toggle_widget(kind: String) -> void:
 	if widgets.is_open(kind):
 		widget_focus = kind
 		_say(WIDGET_GREETINGS[kind], 1.6)
-		if state in CALM:
+		if kind != "lines" and state in CALM:
 			_enter("goto")
 
 
@@ -1822,6 +1845,53 @@ func _notification(what: int) -> void:
 		_save_settings()
 		if widgets:
 			widgets.save()
+
+
+func _on_widget_focused(kind: String) -> void:
+	if kind != "lines":
+		widget_focus = kind
+
+
+func _on_widget_closed(kind: String) -> void:
+	if kind == "lines":
+		line_timer = 1.5   # try out a freshly taught line right away
+
+
+## Every now and then Tobi says one of the lines the user taught him.
+func _update_custom_lines(d: float) -> void:
+	line_timer -= d
+	if line_timer > 0.0:
+		return
+	line_timer = randf_range(35.0, 70.0)
+	if not (state in ["idle", "walk", "sit", "look"]) or bubble_left > 0.0:
+		line_timer = 5.0
+		return
+	var lines := widgets.custom_lines()
+	if lines.size() > 0:
+		_say(_wrap(lines[randi() % lines.size()]), 3.0)
+
+
+## Breaks a long line into rows of about `width` characters (on spaces when possible).
+func _wrap(text: String, width := 16) -> String:
+	var rows := PackedStringArray()
+	var row := ""
+	for word in text.split(" ", false):
+		while word.length() > width:
+			if not row.is_empty():
+				rows.append(row)
+				row = ""
+			rows.append(word.left(width))
+			word = word.substr(width)
+		if row.is_empty():
+			row = word
+		elif row.length() + 1 + word.length() <= width:
+			row += " " + word
+		else:
+			rows.append(row)
+			row = word
+	if not row.is_empty():
+		rows.append(row)
+	return "\n".join(rows)
 
 
 ## Resting the mouse on Tobi tells how long you have been together.
