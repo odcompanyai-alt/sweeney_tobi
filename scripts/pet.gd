@@ -248,7 +248,7 @@ func _ready() -> void:
 	if Autostart.supported():
 		autostart_on = Autostart.is_enabled()
 		if autostart_on:
-			Autostart.set_enabled(true)   # keep the path current if the app was moved
+			Autostart.refresh()
 	_refresh_screen()
 	_apply_scale()
 	last_mouse = Vector2(DisplayServer.mouse_get_position())
