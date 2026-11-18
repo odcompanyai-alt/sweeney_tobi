@@ -27,7 +27,7 @@ const WALK_SHOUT := "우와~~~"
 const CALM := ["idle", "walk", "look", "wave", "hop", "petted", "poke", "pout", "sit", "watch", "goto", "offer", "timekeep", "count"]
 const WIDGET_KINDS := ["memo", "todo", "stopwatch", "calc"]
 const WIDGET_LABELS := ["할 일", "메모", "스톱워치", "계산기"]
-const WIDGET_GREETINGS := {"todo": "할 일 같이 해요!", "memo": "뭐 적을 거예요?", "stopwatch": "시간 재 볼까요?", "calc": "계산은 저한테 맡기세요!", "lines": "어떤 말을 가르쳐 줄 거예요?"}
+const WIDGET_GREETINGS := {"todo": "할 일 같이 해요!", "memo": "뭐 적을 거예요?", "stopwatch": "시간 재 볼까요?", "calc": "계산은 저한테 맡기세요!", "lines": "어떤 말을 가르쳐 줄 거예요?", "home": "몇 시에 집에 가요?"}
 const TICK_LINES := ["째깍째깍…", "시간은 금이에요!", "파이 굽는 시간 재는 중!", "똑딱똑딱~"]
 const COUNT_LINES := ["음…", "하나, 둘…", "흠흠", "?"]
 const COIN_LINES := ["계산 끝!", "정확해요!", "러빗 부인께 보고할게요!"]
@@ -71,7 +71,7 @@ const FACES := {
 	"sad": ["teary", "frown", "worried"],
 }
 
-enum { M_TODO, M_MEMO, M_STOPWATCH, M_CALC, M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_WALK_ONLY, M_LINES, M_AUTOSTART, M_QUIT, M_SIZE0 = 100 }
+enum { M_TODO, M_MEMO, M_STOPWATCH, M_CALC, M_BOX, M_WIG, M_DRINK, M_PIE, M_STAMP, M_WAVE, M_HOP, M_SLEEP, M_STILL, M_WALK_ONLY, M_LINES, M_HOME, M_AUTOSTART, M_QUIT, M_SIZE0 = 100 }
 
 
 class Pose:
@@ -188,6 +188,7 @@ var max_fall_speed := 0.0
 var greet_after_land := true
 var hic_time := -10.0
 
+var first_date := ""            # "YYYY-MM-DD" of the first launch (local date)
 var together_sec := 0.0       # total time Tobi has been on screen, kept across launches
 var save_timer := 30.0
 var hover_t := 0.0
@@ -277,10 +278,14 @@ func _load_settings() -> void:
 		stay_still = bool(cfg.get_value("pet", "stay_still", false))
 		walk_only = bool(cfg.get_value("pet", "walk_only", false))
 		together_sec = float(cfg.get_value("pet", "together_sec", 0.0))
+		first_date = str(cfg.get_value("pet", "first_date", ""))
 	auto_scale = DisplayServer.screen_get_scale()
 	if OS.get_name() == "Windows":
 		auto_scale = clampf(DisplayServer.screen_get_dpi() / 96.0, 1.0, 3.0)
 	pet_scale = SIZE_LEVELS[size_level] * auto_scale
+	if first_date.is_empty():
+		first_date = Time.get_date_string_from_system()
+		_save_settings()
 
 
 func _save_settings() -> void:
@@ -289,6 +294,7 @@ func _save_settings() -> void:
 	cfg.set_value("pet", "stay_still", stay_still)
 	cfg.set_value("pet", "walk_only", walk_only)
 	cfg.set_value("pet", "together_sec", together_sec)
+	cfg.set_value("pet", "first_date", first_date)
 	cfg.save(SETTINGS_PATH)
 
 
@@ -313,6 +319,7 @@ func _build_menu() -> void:
 	menu.add_check_item("제자리에 있기 (걷지 않기)", M_STILL)
 	menu.add_check_item("산책만 하기 (돌발 모션 끄기)", M_WALK_ONLY)
 	menu.add_item("대사 가르치기…", M_LINES)
+	menu.add_item("귀가 시간 설정…", M_HOME)
 	if Autostart.supported():
 		menu.add_check_item("컴퓨터 켤 때 자동 실행", M_AUTOSTART)
 	menu.add_separator()
@@ -359,6 +366,8 @@ func _on_menu(id: int) -> void:
 			_save_settings()
 		M_LINES:
 			_toggle_widget("lines")
+		M_HOME:
+			_toggle_widget("home")
 		M_AUTOSTART:
 			var err := Autostart.set_enabled(not autostart_on)
 			if err.is_empty():
@@ -445,6 +454,7 @@ func _process(delta: float) -> void:
 		"count": _st_count(d)
 		"coins": _st_coins(d)
 		"sulk": _st_sulk(d)
+		"hometime": _st_hometime(d)
 		"sleep": _st_sleep(d)
 		"wake": _st_wake(d)
 		"poke": _st_poke(d)
@@ -1259,7 +1269,7 @@ func _toggle_widget(kind: String) -> void:
 	if widgets.is_open(kind):
 		widget_focus = kind
 		_say(WIDGET_GREETINGS[kind], 1.6)
-		if kind != "lines" and state in CALM:
+		if not (kind in ["lines", "home"]) and state in CALM:
 			_enter("goto")
 
 
@@ -1551,6 +1561,37 @@ func _st_coins(_d: float) -> void:
 	if st < 0.5:
 		pose.root.y = -sin(st / 0.5 * PI) * 12.0
 	if st > 2.0:
+		_enter("idle")
+
+
+## Hover with a going-home time set: checks the pocket watch, tells how long
+## until home time, then how many days you have been together.
+func _st_hometime(_d: float) -> void:
+	var left := _home_minutes_left()
+	pose.arms_front = true
+	pose.prop = "pocketwatch"
+	pose.prop_scale = _ease_out_back(st / 0.3)
+	pose.arm_r = lerpf(-12.0, 35.0, _smooth(st / 0.3))
+	pose.blush = 0.5
+	if st < 0.9:
+		pose.look = Vector2(0.35, 0.7)
+		pose.head_rot = 0.06
+	elif left <= 0:
+		# time to go: waves goodbye with the other hand
+		pose.face = "happy"
+		pose.arm_l = 150.0 + sin(st * 14.0) * 20.0
+	elif left <= 60:
+		# almost there: little happy hops
+		pose.face = "happy"
+		pose.root.y = -absf(sin((st - 0.9) * 7.0)) * 6.0
+		pose.arm_l = 60.0
+	else:
+		pose.face = "hehe"
+		pose.head_rot = sin(st * 3.0) * 0.04
+	if st > 0.5 and _once("home"):
+		_say(_home_text(), 2.4)
+	if st > 2.9:
+		_say(_together_text(), 2.5)
 		_enter("idle")
 
 
@@ -1848,7 +1889,7 @@ func _notification(what: int) -> void:
 
 
 func _on_widget_focused(kind: String) -> void:
-	if kind != "lines":
+	if not (kind in ["lines", "home"]):
 		widget_focus = kind
 
 
@@ -1905,11 +1946,34 @@ func _update_hover(d: float) -> void:
 	hover_t += d
 	if hover_t > 0.35 and not hover_shown and bubble_left <= 0.0 and launcher_t > LAUNCHER_LIFE:
 		hover_shown = true
-		var hours := int(together_sec / 3600.0)
-		var span := "%d시간" % hours
-		if hours >= 24:
-			span = "%d일 %d시간" % [hours / 24, hours % 24]
-		_say("토비와 함께한 지 %s 째!" % span, 2.5)
+		if widgets.home_enabled and state in CALM:
+			_enter("hometime")   # going-home countdown first, then the days together
+		else:
+			_say(_together_text(), 2.5)
+
+
+## Day 1 is the day Tobi first arrived (by the computer's calendar).
+func _together_text() -> String:
+	var start := Time.get_unix_time_from_datetime_string(first_date)
+	var today := Time.get_unix_time_from_datetime_string(Time.get_date_string_from_system())
+	var days := int(round((today - start) / 86400.0)) + 1
+	if days <= 1:
+		return "오늘은 토비가 처음 온 날이에요ㅎㅎ"
+	return "토비와 함께한 지 %d일째!" % days
+
+
+func _home_minutes_left() -> int:
+	var now := Time.get_datetime_dict_from_system()
+	return widgets.home_h * 60 + widgets.home_m - (int(now["hour"]) * 60 + int(now["minute"]))
+
+
+func _home_text() -> String:
+	var left := _home_minutes_left()
+	if left <= 0:
+		return "집에 갈 시간이에요! 어서 가요~"
+	if left < 60:
+		return "집에 가려면 %d분 남았어요!" % left
+	return "집에 가려면 %d시간 %d분 남았어요!" % [left / 60, left % 60]
 
 
 func _poll_mouse(d: float) -> void:
@@ -2275,7 +2339,10 @@ func _draw_prop(p: Pose, bt: Transform2D) -> void:
 	_part(p.prop, pxf)
 	if p.prop == "pocketwatch" and widgets:
 		draw_set_transform_matrix(pxf)
-		var a := widgets.sw_elapsed / 60.0 * TAU
+		var sec := widgets.sw_elapsed
+		if state == "hometime":
+			sec = float(Time.get_datetime_dict_from_system()["second"])
+		var a := sec / 60.0 * TAU
 		_line(Vector2.ZERO, Vector2(0, -5.8).rotated(a), COL_ANGER, 0.8)
 		_ell(Vector2.ZERO, 0.9, 0.9, COL_ANGER)
 

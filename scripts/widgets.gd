@@ -13,9 +13,9 @@ signal focused(kind: String)
 signal closed(kind: String)
 
 const SAVE_PATH := "user://widgets.cfg"
-const KINDS := ["todo", "memo", "stopwatch", "calc", "lines"]
-const TITLES := {"todo": "토비의 할 일", "memo": "토비의 메모", "stopwatch": "토비의 스톱워치", "calc": "토비의 계산기", "lines": "토비에게 대사 가르치기"}
-const SIZES := {"todo": Vector2i(270, 340), "memo": Vector2i(300, 340), "stopwatch": Vector2i(270, 210), "calc": Vector2i(260, 360), "lines": Vector2i(300, 330)}
+const KINDS := ["todo", "memo", "stopwatch", "calc", "lines", "home"]
+const TITLES := {"todo": "토비의 할 일", "memo": "토비의 메모", "stopwatch": "토비의 스톱워치", "calc": "토비의 계산기", "lines": "토비에게 대사 가르치기", "home": "귀가 시간 설정"}
+const SIZES := {"todo": Vector2i(270, 340), "memo": Vector2i(300, 340), "stopwatch": Vector2i(270, 210), "calc": Vector2i(260, 360), "lines": Vector2i(300, 330), "home": Vector2i(270, 210)}
 const CALC_KEYS := ["C", "±", "%", "÷", "7", "8", "9", "×", "4", "5", "6", "-", "1", "2", "3", "+", "0", ".", "←", "="]
 const COL_INK := Color("#4a3228")
 const COL_SOFT := Color("#9a8670")
@@ -31,6 +31,9 @@ var todo_items: Array = []
 var memo_text := ""
 var lines_edit: TextEdit
 var lines_text := ""
+var home_enabled := false
+var home_h := 18
+var home_m := 0
 var memo_dirty := false
 var memo_save_timer := 0.0
 
@@ -59,6 +62,7 @@ func setup(scale_factor: float) -> void:
 	_build_stopwatch()
 	_build_calc()
 	_build_lines()
+	_build_home()
 
 
 func _process(delta: float) -> void:
@@ -122,6 +126,9 @@ func save() -> void:
 	cfg.set_value("todo", "items", todo_items)
 	cfg.set_value("memo", "text", memo_edit.text if memo_edit else memo_text)
 	cfg.set_value("lines", "text", lines_edit.text if lines_edit else lines_text)
+	cfg.set_value("home", "enabled", home_enabled)
+	cfg.set_value("home", "hour", home_h)
+	cfg.set_value("home", "minute", home_m)
 	cfg.save(SAVE_PATH)
 
 
@@ -131,6 +138,9 @@ func _load() -> void:
 		todo_items = cfg.get_value("todo", "items", [])
 		memo_text = str(cfg.get_value("memo", "text", ""))
 		lines_text = str(cfg.get_value("lines", "text", ""))
+		home_enabled = bool(cfg.get_value("home", "enabled", false))
+		home_h = int(cfg.get_value("home", "hour", 18))
+		home_m = int(cfg.get_value("home", "minute", 0))
 
 
 func format_time(t: float) -> String:
@@ -324,6 +334,51 @@ func custom_lines() -> PackedStringArray:
 		if not t.is_empty():
 			out.append(t)
 	return out
+
+
+# --- Going-home time --------------------------------------------------
+
+func _build_home() -> void:
+	var v := _content("home")
+	var check := CheckBox.new()
+	check.text = "귀가 시간 알려주기"
+	check.button_pressed = home_enabled
+	check.toggled.connect(_on_home_toggled)
+	v.add_child(check)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 8)
+	v.add_child(row)
+	row.add_child(_home_spin(23, home_h, "시", _on_home_hour))
+	row.add_child(_home_spin(59, home_m, "분", _on_home_minute))
+	_hint(v, "토비에게 마우스를 올리면 집에 갈 때까지 남은 시간을 알려줘요")
+
+
+func _home_spin(max_value: int, value: int, suffix: String, on_change: Callable) -> SpinBox:
+	var spin := SpinBox.new()
+	spin.min_value = 0
+	spin.max_value = max_value
+	spin.step = 1
+	spin.value = value
+	spin.suffix = suffix
+	spin.custom_minimum_size = Vector2(96, 0)
+	spin.value_changed.connect(on_change)
+	return spin
+
+
+func _on_home_toggled(on: bool) -> void:
+	home_enabled = on
+	save()
+
+
+func _on_home_hour(value: float) -> void:
+	home_h = int(value)
+	save()
+
+
+func _on_home_minute(value: float) -> void:
+	home_m = int(value)
+	save()
 
 
 # --- Stopwatch --------------------------------------------------------
