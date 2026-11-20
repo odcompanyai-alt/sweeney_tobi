@@ -35,6 +35,8 @@ const CHEER_LINES := ["해냈다!", "최고예요!", "하나 끝!", "잘했어�
 const CONFETTI_COLORS := [Color("#ff698c"), Color("#ffd65a"), Color("#7fb6ff"), Color("#9ad48a"), Color("#e8743b")]
 const LONG_PRESS := 0.55
 const LAUNCHER_LIFE := 6.0
+const LAUNCHER_ZOOM := 1.45                 # button/icon size multiplier
+const LAUNCHER_CARD := Rect2(-134, -280, 268, 96)   # backing panel (units, around the anchor)
 const PETTABLE := ["idle", "walk", "look", "wave", "hop", "petted"]
 
 const COL_OUTLINE := Color("#4a3228")
@@ -122,6 +124,10 @@ var logo_tex: Texture2D
 var font: SystemFont
 var bubble_style := StyleBoxFlat.new()
 var menu: PopupMenu
+var actions_menu: PopupMenu
+var size_menu: PopupMenu
+var options_menu: PopupMenu
+var launcher_style := StyleBoxFlat.new()
 
 var size_level := 1
 var auto_scale := 1.0
@@ -232,6 +238,9 @@ func _ready() -> void:
 	bubble_style.bg_color = Color.WHITE
 	bubble_style.border_color = COL_OUTLINE
 	bubble_style.anti_aliasing = true
+	launcher_style.border_color = COL_OUTLINE
+	launcher_style.anti_aliasing = true
+	launcher_style.shadow_color = Color(0, 0, 0, 0.12)
 
 	_load_settings()
 	_build_menu()
@@ -246,6 +255,8 @@ func _ready() -> void:
 	widgets.calc_result.connect(_on_calc_result)
 	widgets.focused.connect(_on_widget_focused)
 	widgets.closed.connect(_on_widget_closed)
+	widgets.line_added.connect(_on_line_added)
+	widgets.home_saved.connect(_on_home_saved)
 	if Autostart.supported():
 		autostart_on = Autostart.is_enabled()
 		if autostart_on:
@@ -300,45 +311,62 @@ func _save_settings() -> void:
 
 func _build_menu() -> void:
 	menu = PopupMenu.new()
+	# work tools stay on the first level
 	menu.add_check_item("할 일 목록", M_TODO)
 	menu.add_check_item("메모장", M_MEMO)
 	menu.add_check_item("스톱워치", M_STOPWATCH)
 	menu.add_check_item("계산기", M_CALC)
-	menu.add_separator()
-	menu.add_item("박스 위에서 외치기", M_BOX)
-	menu.add_item("가발 벗기", M_WIG)
-	menu.add_item("위스키 마시기", M_DRINK)
-	menu.add_item("파이 서빙하기", M_PIE)
-	menu.add_item("로고 도장 쾅!", M_STAMP)
-	menu.add_item("손 흔들기", M_WAVE)
-	menu.add_item("깡총 뛰기", M_HOP)
-	menu.add_item("낮잠 자기", M_SLEEP)
-	menu.add_separator()
-	for i in SIZE_LEVELS.size():
-		menu.add_radio_check_item("크기: " + SIZE_NAMES[i], M_SIZE0 + i)
-	menu.add_check_item("제자리에 있기 (걷지 않기)", M_STILL)
-	menu.add_check_item("산책만 하기 (돌발 모션 끄기)", M_WALK_ONLY)
-	menu.add_item("대사 가르치기…", M_LINES)
 	menu.add_item("귀가 시간 설정…", M_HOME)
+	menu.add_separator()
+
+	actions_menu = _submenu("액션", [
+		["박스 위에서 외치기", M_BOX], ["가발 벗기", M_WIG], ["위스키 마시기", M_DRINK],
+		["파이 서빙하기", M_PIE], ["로고 도장 쾅!", M_STAMP], ["손 흔들기", M_WAVE],
+		["깡총 뛰기", M_HOP], ["낮잠 자기", M_SLEEP]])
+	menu.add_item("대사 가르치기…", M_LINES)
+	menu.add_separator()
+
+	size_menu = _submenu("크기", [])
+	for i in SIZE_LEVELS.size():
+		size_menu.add_radio_check_item(SIZE_NAMES[i], M_SIZE0 + i)
+	options_menu = _submenu("설정", [])
+	options_menu.add_check_item("제자리에 있기 (걷지 않기)", M_STILL)
+	options_menu.add_check_item("산책만 하기 (돌발 모션 끄기)", M_WALK_ONLY)
 	if Autostart.supported():
-		menu.add_check_item("컴퓨터 켤 때 자동 실행", M_AUTOSTART)
+		options_menu.add_check_item("컴퓨터 켤 때 자동 실행", M_AUTOSTART)
 	menu.add_separator()
 	menu.add_item("종료", M_QUIT)
 	menu.id_pressed.connect(_on_menu)
 	add_child(menu)
 
 
+## Adds a hover-to-open submenu to the main menu; its items go to _on_menu too.
+func _submenu(label: String, items: Array) -> PopupMenu:
+	var sub := PopupMenu.new()
+	for it in items:
+		sub.add_item(str(it[0]), int(it[1]))
+	sub.id_pressed.connect(_on_menu)
+	menu.add_child(sub)
+	menu.add_submenu_node_item(label, sub)
+	return sub
+
+
+func _set_checked(m: PopupMenu, id: int, on: bool) -> void:
+	var i := m.get_item_index(id)
+	if i >= 0:
+		m.set_item_checked(i, on)
+
+
 func _sync_menu() -> void:
 	for i in SIZE_LEVELS.size():
-		menu.set_item_checked(menu.get_item_index(M_SIZE0 + i), i == size_level)
-	menu.set_item_checked(menu.get_item_index(M_STILL), stay_still)
-	menu.set_item_checked(menu.get_item_index(M_WALK_ONLY), walk_only)
-	if Autostart.supported():
-		menu.set_item_checked(menu.get_item_index(M_AUTOSTART), autostart_on)
-	menu.set_item_checked(menu.get_item_index(M_TODO), widgets.is_open("todo"))
-	menu.set_item_checked(menu.get_item_index(M_MEMO), widgets.is_open("memo"))
-	menu.set_item_checked(menu.get_item_index(M_STOPWATCH), widgets.is_open("stopwatch"))
-	menu.set_item_checked(menu.get_item_index(M_CALC), widgets.is_open("calc"))
+		_set_checked(size_menu, M_SIZE0 + i, i == size_level)
+	_set_checked(options_menu, M_STILL, stay_still)
+	_set_checked(options_menu, M_WALK_ONLY, walk_only)
+	_set_checked(options_menu, M_AUTOSTART, autostart_on)
+	_set_checked(menu, M_TODO, widgets.is_open("todo"))
+	_set_checked(menu, M_MEMO, widgets.is_open("memo"))
+	_set_checked(menu, M_STOPWATCH, widgets.is_open("stopwatch"))
+	_set_checked(menu, M_CALC, widgets.is_open("calc"))
 
 
 func _open_menu() -> void:
@@ -405,6 +433,9 @@ func _apply_scale() -> void:
 	view_xf = Transform2D(0.0, Vector2(pet_scale, pet_scale), 0.0, FEET * pet_scale)
 	bubble_style.set_border_width_all(maxi(1, roundi(2.0 * pet_scale)))
 	bubble_style.set_corner_radius_all(roundi(10.0 * pet_scale))
+	launcher_style.set_border_width_all(maxi(1, roundi(2.0 * pet_scale)))
+	launcher_style.set_corner_radius_all(roundi(18.0 * pet_scale))
+	launcher_style.shadow_size = roundi(4.0 * pet_scale)
 	last_region = Rect2i()
 	region_full = false
 
@@ -1641,16 +1672,16 @@ func _open_launcher() -> void:
 
 
 func _launcher_pos(i: int) -> Vector2:
-	var x := -72.0 + i * 48.0
+	var x := -102.0 + i * 68.0
 	# sits above the speech-bubble area so the two never overlap
-	return launcher_off + Vector2(x, -230.0 + absf(x) * 0.12)
+	return launcher_off + Vector2(x, -250.0 + absf(x) * 0.06)
 
 
 func _hit_launcher(local_px: Vector2) -> int:
 	if launcher_t > LAUNCHER_LIFE:
 		return -1
 	for i in WIDGET_LABELS.size():
-		if local_px.distance_to(view_xf * _launcher_pos(i)) < 20.0 * pet_scale:
+		if local_px.distance_to(view_xf * _launcher_pos(i)) < 28.0 * pet_scale:
 			return i
 	return -1
 
@@ -1893,6 +1924,23 @@ func _on_widget_focused(kind: String) -> void:
 		widget_focus = kind
 
 
+## Says a freshly taught line right away, so the user sees it took.
+func _on_line_added(text: String) -> void:
+	_say(_wrap(text), 2.6)
+	_spawn_spark(_anchor_of(Vector2(randf_range(-30, 30), -150)))
+	if state in CALM and not walk_only:
+		_enter("wave")
+	line_timer = randf_range(35.0, 70.0)
+
+
+func _on_home_saved(enabled: bool, hour: int, minute: int) -> void:
+	if enabled:
+		_say("%d시 %02d분에 집에 가는 거죠?\n기억할게요!" % [hour, minute], 2.6)
+	else:
+		_say("귀가 알림을 껐어요", 1.8)
+	_spawn_heart(_anchor_of(Vector2(-28, -140)))
+
+
 func _on_widget_closed(kind: String) -> void:
 	if kind == "lines":
 		line_timer = 1.5   # try out a freshly taught line right away
@@ -2088,7 +2136,7 @@ func _update_passthrough() -> void:
 	if box_visible:
 		r = r.merge(Rect2(-44, -48, 88, 52))
 	if launcher_t < LAUNCHER_LIFE:
-		r = r.merge(Rect2(launcher_off + Vector2(-100, -260), Vector2(200, 76)))
+		r = r.merge(Rect2(LAUNCHER_CARD.position + launcher_off, LAUNCHER_CARD.size).grow(8.0))
 	if stamp_t < STAMP_LIFE:
 		r = r.merge(Rect2(stamp_pos - Vector2(LOGO_WIDTH * 0.7, 80), Vector2(LOGO_WIDTH * 1.4, 160)))
 	if not wig_attached:
@@ -2229,12 +2277,22 @@ func _draw_launcher() -> void:
 	if launcher_t > LAUNCHER_LIFE:
 		return
 	var fade := clampf((LAUNCHER_LIFE - launcher_t) / 0.3, 0.0, 1.0)
+	# backing card: roomy padding behind the buttons
+	var card_k := _smooth(launcher_t / 0.2) * fade
+	if card_k > 0.02:
+		var card := Rect2(LAUNCHER_CARD.position + launcher_off, LAUNCHER_CARD.size)
+		var center := card.get_center()
+		card = Rect2(center - card.size * 0.5 * card_k, card.size * card_k)
+		launcher_style.bg_color = Color(1.0, 0.973, 0.925, 0.94 * fade)
+		launcher_style.border_color = Color(COL_OUTLINE, fade)
+		draw_set_transform_matrix(Transform2D.IDENTITY)
+		launcher_style.draw(get_canvas_item(), Rect2(view_xf * card.position, card.size * pet_scale))
 	for i in WIDGET_LABELS.size():
 		var k := _ease_out_back((launcher_t - i * 0.07) / 0.25) * fade
 		if k <= 0.05:
 			continue
 		var c := _launcher_pos(i)
-		draw_set_transform_matrix(view_xf * Transform2D(0.0, Vector2(k, k), 0.0, c))
+		draw_set_transform_matrix(view_xf * Transform2D(0.0, Vector2(k, k) * LAUNCHER_ZOOM, 0.0, c))
 		_ell(Vector2(0, 1.5), 17.0, 17.0, Color(0, 0, 0, 0.12))
 		_ell(Vector2.ZERO, 17.0, 17.0, Color("#fff8ec"))
 		_arc(Vector2.ZERO, 17.0, 0.0, TAU, COL_OUTLINE, 1.6)
@@ -2264,7 +2322,7 @@ func _draw_launcher() -> void:
 					var bx := -4.0 + (j % 3) * 4.0
 					var by := 1.0 + int(j / 3.0) * 4.5
 					_ell(Vector2(bx, by), 1.3, 1.3, Color("#ffd65a") if j == 5 else Color.WHITE)
-		_text_px(c + Vector2(0, 27.0), WIDGET_LABELS[i], 10.0, COL_OUTLINE, Color(1, 1, 1, 0.95))
+		_text_px(c + Vector2(0, 17.0 * LAUNCHER_ZOOM + 12.0), WIDGET_LABELS[i], 14.0, COL_OUTLINE, Color(1, 1, 1, 0.95))
 
 
 func _draw_stamp() -> void:

@@ -11,11 +11,13 @@ signal calc_key
 signal calc_result(value: float, error: bool)
 signal focused(kind: String)
 signal closed(kind: String)
+signal line_added(text: String)
+signal home_saved(enabled: bool, hour: int, minute: int)
 
 const SAVE_PATH := "user://widgets.cfg"
 const KINDS := ["todo", "memo", "stopwatch", "calc", "lines", "home"]
 const TITLES := {"todo": "토비의 할 일", "memo": "토비의 메모", "stopwatch": "토비의 스톱워치", "calc": "토비의 계산기", "lines": "토비에게 대사 가르치기", "home": "귀가 시간 설정"}
-const SIZES := {"todo": Vector2i(270, 340), "memo": Vector2i(300, 340), "stopwatch": Vector2i(270, 210), "calc": Vector2i(260, 360), "lines": Vector2i(300, 330), "home": Vector2i(270, 210)}
+const SIZES := {"todo": Vector2i(270, 340), "memo": Vector2i(300, 340), "stopwatch": Vector2i(270, 210), "calc": Vector2i(260, 360), "lines": Vector2i(300, 330), "home": Vector2i(280, 270)}
 const CALC_KEYS := ["C", "±", "%", "÷", "7", "8", "9", "×", "4", "5", "6", "-", "1", "2", "3", "+", "0", ".", "←", "="]
 const COL_INK := Color("#4a3228")
 const COL_SOFT := Color("#9a8670")
@@ -27,10 +29,15 @@ var windows := {}
 var todo_input: LineEdit
 var todo_list: VBoxContainer
 var memo_edit: TextEdit
-var todo_items: Array = []
+var todo_items: Array = []       # {"text": String, "done": bool}; unfinished first
 var memo_text := ""
-var lines_edit: TextEdit
-var lines_text := ""
+var lines_input: LineEdit
+var lines_list: VBoxContainer
+var lines_items: Array = []      # the user's own lines, one String each
+var home_check: CheckBox
+var home_h_spin: SpinBox
+var home_m_spin: SpinBox
+var home_status: Label
 var home_enabled := false
 var home_h := 18
 var home_m := 0
@@ -104,6 +111,8 @@ func open(kind: String, near: Vector2, usable: Rect2i) -> void:
 	match kind:
 		"todo": todo_input.grab_focus()
 		"memo": memo_edit.grab_focus()
+		"lines": lines_input.grab_focus()
+		"home": _home_sync_ui()
 	focused.emit(kind)
 
 
@@ -125,7 +134,7 @@ func save() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("todo", "items", todo_items)
 	cfg.set_value("memo", "text", memo_edit.text if memo_edit else memo_text)
-	cfg.set_value("lines", "text", lines_edit.text if lines_edit else lines_text)
+	cfg.set_value("lines", "items", lines_items)
 	cfg.set_value("home", "enabled", home_enabled)
 	cfg.set_value("home", "hour", home_h)
 	cfg.set_value("home", "minute", home_m)
@@ -135,9 +144,18 @@ func save() -> void:
 func _load() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SAVE_PATH) == OK:
-		todo_items = cfg.get_value("todo", "items", [])
+		# older versions stored to-dos as plain strings and lines as one text block
+		for item in cfg.get_value("todo", "items", []):
+			if item is Dictionary:
+				todo_items.append({"text": str(item.get("text", "")), "done": bool(item.get("done", false))})
+			else:
+				todo_items.append({"text": str(item), "done": false})
 		memo_text = str(cfg.get_value("memo", "text", ""))
-		lines_text = str(cfg.get_value("lines", "text", ""))
+		lines_items = cfg.get_value("lines", "items", [])
+		if lines_items.is_empty():
+			for line in str(cfg.get_value("lines", "text", "")).split("\n"):
+				if not line.strip_edges().is_empty():
+					lines_items.append(line.strip_edges())
 		home_enabled = bool(cfg.get_value("home", "enabled", false))
 		home_h = int(cfg.get_value("home", "hour", 18))
 		home_m = int(cfg.get_value("home", "minute", 0))
@@ -212,78 +230,133 @@ func _hint(v: VBoxContainer, text: String) -> void:
 
 func _build_todo() -> void:
 	var v := _content("todo")
-	var row := HBoxContainer.new()
-	v.add_child(row)
-	todo_input = LineEdit.new()
-	todo_input.placeholder_text = "할 일을 적고 Enter"
-	todo_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	todo_input.text_submitted.connect(_on_todo_submit)
-	row.add_child(todo_input)
-	var add := Button.new()
-	add.text = "추가"
-	add.pressed.connect(func() -> void: _on_todo_submit(todo_input.text))
-	row.add_child(add)
+	todo_input = _input_row(v, "할 일을 적고 Enter", _on_todo_submit)
+	todo_list = _scroll_list(v)
+	_hint(v, "다 한 일을 체크하면 토비가 같이 기뻐해요! 지우려면 × 를 눌러 주세요.")
+	_rebuild_todo()
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	v.add_child(scroll)
-	todo_list = VBoxContainer.new()
-	todo_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(todo_list)
-	_hint(v, "다 한 일을 체크하면 토비가 같이 기뻐해요!")
+
+func _rebuild_todo() -> void:
+	_clear(todo_list)
 	for item in todo_items:
-		_add_todo_row(str(item))
+		_add_todo_row(item)
 
 
-func _add_todo_row(text: String) -> void:
+func _add_todo_row(item: Dictionary) -> void:
+	var done := bool(item["done"])
 	var row := HBoxContainer.new()
-	row.set_meta("text", text)
 	var cb := CheckBox.new()
-	cb.text = text
-	cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	cb.toggled.connect(_on_todo_toggled.bind(row))
+	cb.button_pressed = done
+	cb.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	cb.toggled.connect(_on_todo_toggled.bind(item))
 	row.add_child(cb)
-	var del := Button.new()
-	del.text = "×"
-	del.flat = true
-	del.tooltip_text = "삭제"
-	del.pressed.connect(_on_todo_delete.bind(row))
-	row.add_child(del)
+	var label := RichTextLabel.new()
+	label.bbcode_enabled = true
+	label.fit_content = true
+	label.scroll_active = false
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var text := str(item["text"]).replace("[", "[lb]")
+	label.text = "[s]%s[/s]" % text if done else text
+	label.add_theme_color_override("default_color", COL_SOFT if done else COL_INK)
+	row.add_child(label)
+	row.add_child(_delete_button(_on_todo_delete.bind(item)))
 	todo_list.add_child(row)
 
 
 func _on_todo_submit(text: String) -> void:
 	var t := text.strip_edges()
+	todo_input.clear()
 	if t.is_empty():
 		return
-	todo_items.append(t)
-	_add_todo_row(t)
-	todo_input.clear()
+	# new items go to the end of the unfinished ones
+	todo_items.insert(_todo_open_count(), {"text": t, "done": false})
+	_rebuild_todo()
 	save()
 
 
-func _on_todo_toggled(on: bool, row: HBoxContainer) -> void:
-	if not on:
+func _todo_open_count() -> int:
+	var n := 0
+	for item in todo_items:
+		if not bool(item["done"]):
+			n += 1
+	return n
+
+
+## Checked: strike through and sink below the unfinished items.
+## Unchecked: back to the end of the unfinished items.
+func _on_todo_toggled(on: bool, item: Dictionary) -> void:
+	var i := todo_items.find(item)
+	if i < 0:
 		return
-	var text := str(row.get_meta("text"))
-	todo_items.erase(text)
+	todo_items.remove_at(i)
+	item["done"] = on
+	if on:
+		todo_items.append(item)
+	else:
+		todo_items.insert(_todo_open_count(), item)
 	save()
-	for c in row.get_children():
-		if c is BaseButton:
-			(c as BaseButton).disabled = true
-	var tw := row.create_tween()
-	tw.tween_interval(0.25)
-	tw.tween_property(row, "modulate:a", 0.0, 0.45)
-	tw.tween_callback(row.queue_free)
-	todo_completed.emit(text)
+	call_deferred("_rebuild_todo")   # the checkbox is still inside its signal
+	if on:
+		todo_completed.emit(str(item["text"]))
 
 
-func _on_todo_delete(row: HBoxContainer) -> void:
-	todo_items.erase(str(row.get_meta("text")))
-	row.queue_free()
+func _on_todo_delete(item: Dictionary) -> void:
+	var i := todo_items.find(item)
+	if i >= 0:
+		todo_items.remove_at(i)
 	save()
+	call_deferred("_rebuild_todo")
+
+
+# --- Shared list pieces -----------------------------------------------
+
+func _input_row(v: VBoxContainer, placeholder: String, on_submit: Callable) -> LineEdit:
+	var row := HBoxContainer.new()
+	v.add_child(row)
+	var input := LineEdit.new()
+	input.placeholder_text = placeholder
+	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	input.text_submitted.connect(on_submit)
+	row.add_child(input)
+	var add := Button.new()
+	add.text = "추가"
+	add.focus_mode = Control.FOCUS_NONE
+	add.pressed.connect(func() -> void: on_submit.call(input.text))
+	row.add_child(add)
+	return input
+
+
+func _scroll_list(v: VBoxContainer) -> VBoxContainer:
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	v.add_child(scroll)
+	var list := VBoxContainer.new()
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list.add_theme_constant_override("separation", 4)
+	scroll.add_child(list)
+	return list
+
+
+func _delete_button(on_press: Callable) -> Button:
+	var del := Button.new()
+	del.text = "×"
+	del.flat = true
+	del.focus_mode = Control.FOCUS_NONE
+	del.tooltip_text = "삭제"
+	del.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	del.add_theme_font_size_override("font_size", 18)
+	del.pressed.connect(on_press)
+	return del
+
+
+func _clear(list: Container) -> void:
+	for c in list.get_children():
+		list.remove_child(c)
+		c.queue_free()
 
 
 # --- Memo -------------------------------------------------------------
@@ -309,76 +382,117 @@ func _on_memo_changed() -> void:
 
 func _build_lines() -> void:
 	var v := _content("lines")
-	lines_edit = TextEdit.new()
-	lines_edit.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	lines_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	lines_edit.placeholder_text = "한 줄에 대사 하나씩 적어 주세요\n\n예) 오늘도 화이팅!\n예) 물 한 잔 마셔요~"
-	lines_edit.text = lines_text
-	lines_edit.text_changed.connect(_on_lines_changed)
-	v.add_child(lines_edit)
-	_hint(v, "토비가 돌아다니다가 가끔 이 중 하나를 말해요. 자동 저장돼요.")
+	lines_input = _input_row(v, "가르칠 대사를 적고 Enter", _on_line_submit)
+	lines_list = _scroll_list(v)
+	_hint(v, "토비가 돌아다니다가 가끔 이 중 하나를 말해요.")
+	_rebuild_lines()
 
 
-func _on_lines_changed() -> void:
-	memo_dirty = true
-	memo_save_timer = 1.0
+func _rebuild_lines() -> void:
+	_clear(lines_list)
+	if lines_items.is_empty():
+		var empty := Label.new()
+		empty.text = "아직 가르친 대사가 없어요"
+		empty.add_theme_color_override("font_color", COL_SOFT)
+		lines_list.add_child(empty)
+		return
+	for i in lines_items.size():
+		var row := HBoxContainer.new()
+		var label := Label.new()
+		label.text = "“%s”" % str(lines_items[i])
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(label)
+		row.add_child(_delete_button(_on_line_delete.bind(i)))
+		lines_list.add_child(row)
 
 
-## The lines the user taught Tobi (blank rows skipped).
+func _on_line_submit(text: String) -> void:
+	var t := text.strip_edges()
+	lines_input.clear()
+	if t.is_empty():
+		return
+	lines_items.append(t)
+	_rebuild_lines()
+	save()
+	line_added.emit(t)
+
+
+func _on_line_delete(i: int) -> void:
+	if i >= 0 and i < lines_items.size():
+		lines_items.remove_at(i)
+	save()
+	call_deferred("_rebuild_lines")
+
+
+## The lines the user taught Tobi.
 func custom_lines() -> PackedStringArray:
-	var out := PackedStringArray()
-	if lines_edit == null:
-		return out
-	for line in lines_edit.text.split("\n"):
-		var t := line.strip_edges()
-		if not t.is_empty():
-			out.append(t)
-	return out
+	return PackedStringArray(lines_items)
 
 
 # --- Going-home time --------------------------------------------------
 
 func _build_home() -> void:
 	var v := _content("home")
-	var check := CheckBox.new()
-	check.text = "귀가 시간 알려주기"
-	check.button_pressed = home_enabled
-	check.toggled.connect(_on_home_toggled)
-	v.add_child(check)
+	home_check = CheckBox.new()
+	home_check.text = "귀가 시간 알려주기"
+	v.add_child(home_check)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 8)
 	v.add_child(row)
-	row.add_child(_home_spin(23, home_h, "시", _on_home_hour))
-	row.add_child(_home_spin(59, home_m, "분", _on_home_minute))
-	_hint(v, "토비에게 마우스를 올리면 집에 갈 때까지 남은 시간을 알려줘요")
+	home_h_spin = _home_spin(23, "시")
+	home_m_spin = _home_spin(59, "분")
+	row.add_child(home_h_spin)
+	row.add_child(home_m_spin)
+	var ok := Button.new()
+	ok.text = "확인"
+	ok.focus_mode = Control.FOCUS_NONE
+	ok.add_theme_stylebox_override("normal", _accent_box())
+	ok.add_theme_color_override("font_color", Color.WHITE)
+	ok.add_theme_color_override("font_hover_color", Color.WHITE)
+	ok.pressed.connect(_on_home_confirm)
+	v.add_child(ok)
+	home_status = Label.new()
+	home_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	home_status.add_theme_color_override("font_color", Color("#3f8f55"))
+	home_status.modulate.a = 0.0
+	v.add_child(home_status)
+	_hint(v, "[확인]을 눌러야 저장돼요. 토비에게 마우스를 올리면 남은 시간을 알려줘요.")
+	_home_sync_ui()
 
 
-func _home_spin(max_value: int, value: int, suffix: String, on_change: Callable) -> SpinBox:
+func _home_spin(max_value: int, suffix: String) -> SpinBox:
 	var spin := SpinBox.new()
 	spin.min_value = 0
 	spin.max_value = max_value
 	spin.step = 1
-	spin.value = value
 	spin.suffix = suffix
 	spin.custom_minimum_size = Vector2(96, 0)
-	spin.value_changed.connect(on_change)
 	return spin
 
 
-func _on_home_toggled(on: bool) -> void:
-	home_enabled = on
+## Puts the saved values back into the controls (drops unsaved edits).
+func _home_sync_ui() -> void:
+	home_check.button_pressed = home_enabled
+	home_h_spin.value = home_h
+	home_m_spin.value = home_m
+	home_status.modulate.a = 0.0
+
+
+func _on_home_confirm() -> void:
+	home_h_spin.apply()
+	home_m_spin.apply()
+	home_enabled = home_check.button_pressed
+	home_h = int(home_h_spin.value)
+	home_m = int(home_m_spin.value)
 	save()
-
-
-func _on_home_hour(value: float) -> void:
-	home_h = int(value)
-	save()
-
-
-func _on_home_minute(value: float) -> void:
-	home_m = int(value)
-	save()
+	home_status.text = "저장됐어요! %02d:%02d %s" % [home_h, home_m, "알림 켜짐" if home_enabled else "(알림 꺼짐)"]
+	home_status.modulate.a = 1.0
+	var tw := home_status.create_tween()
+	tw.tween_interval(1.6)
+	tw.tween_property(home_status, "modulate:a", 0.0, 0.6)
+	home_saved.emit(home_enabled, home_h, home_m)
 
 
 # --- Stopwatch --------------------------------------------------------
